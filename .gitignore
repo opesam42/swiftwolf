@@ -67,3 +67,4 @@ Thumbs.db
 # DOCUMNET
 docs/internal/
 jobs/files/
+*.db

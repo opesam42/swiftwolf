@@ -3,7 +3,9 @@ from typing import Annotated
 from fastapi import Depends
 from sqlmodel import Session, SQLModel, create_engine
 
-DATABASE_URL = "sqlite:///./swiftwolf.db"
+from src.config import settings
+
+DATABASE_URL = settings.DATABASE_URL
 
 
 def build_engine(database_url: str | None = None):

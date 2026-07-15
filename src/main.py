@@ -1,8 +1,16 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from src.routes import router
+from src.database import db_init
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db_init()
+    yield
 
 app = FastAPI(
+    lifespan=lifespan,
     title="SwiftWolf",
     description="SwiftWolf API",
     version="0.1.0"

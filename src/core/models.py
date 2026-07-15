@@ -69,9 +69,12 @@ class Transaction(SQLModel, table=True):
     )
     medium: str = Field(
         max_length=20,
-        sa_column_kwargs={"comment": "app, ussd, atm_withdrawal, or online_payment. Determines "
-                                       "whether 'session' data existed on the originating "
-                                       "/v1/score request, and which step_up_method is available."},
+        sa_column_kwargs={"comment": "app, ussd, atm_withdrawal, or online_payment for real "
+                                       "live transactions — determines whether 'session' data "
+                                       "existed on the originating /v1/score request, and which "
+                                       "step_up_method is available. 'historical_seed' is a "
+                                       "separate sentinel value for rows backfilled from a bank "
+                                       "statement CSV, which never went through /v1/score at all."},
     )
     nibss_reference: Optional[str] = Field(
         default=None, max_length=64,

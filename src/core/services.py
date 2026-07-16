@@ -13,6 +13,7 @@ import json
 from sqlmodel import select
 
 from src.core.repository import CustomerProfile, ZScoreAnomalyDetector
+from src.core.scoring import score_transaction
 
 
 class CustomerProfileService:
@@ -98,6 +99,24 @@ class CustomerProfileService:
         )
         self.save(customer_id, profile)
         return profile
+
+
+class RuleEngineService:
+    """Applies the Layer 1 rules to an incoming transaction and cached baseline."""
+
+    def __init__(self, blacklisted_accounts: set[str] | None = None):
+        self.blacklisted_accounts = blacklisted_accounts or set()
+
+    def score(self, transaction: dict, baseline: dict | None = None) -> dict:
+        if baseline is None:
+            baseline = {
+                "known_beneficiaries": [],
+                "known_bank_codes": [],
+                "category_baselines": {},
+                "typical_hours": [],
+                "is_cold_start": True,
+            }
+        return score_transaction(transaction, baseline, self.blacklisted_accounts)
 
 
 class AnomalyDetectorService:

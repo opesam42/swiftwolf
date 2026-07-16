@@ -2,6 +2,7 @@ from river import anomaly, compose, preprocessing, stats
 from collections import defaultdict
 import json
 import pickle
+from math import atan2, cos, radians, sin, sqrt
 
 class CustomerProfile:
     """One instance per customer. Persisted as JSON, not pickled River objects directly,
@@ -24,6 +25,7 @@ class CustomerProfile:
         # not "have they used this exact account before." A new account at a
         # familiar bank is a smaller signal than a new account at an unfamiliar one.
         self.known_bank_codes = set()
+        self.location_counts = defaultdict(int)
         self.transaction_count = 0
 
         # THIS is what Layer 1's amount-deviation check actually uses now —
@@ -31,7 +33,7 @@ class CustomerProfile:
         self.category_stats = defaultdict(lambda: {"mean": stats.Mean(), "var": stats.Var()})
 
     def update(self, amount: float, hour: int, beneficiary_account: str,
-               beneficiary_bank_code: str, transaction_type: str):
+               beneficiary_bank_code: str, transaction_type: str, geolocation: dict | None = None):
         self.global_mean.update(amount)
         self.global_var.update(amount)
         self.hour_counts[hour] += 1
@@ -40,6 +42,14 @@ class CustomerProfile:
         self.transaction_count += 1
         self.category_stats[transaction_type]["mean"].update(amount)
         self.category_stats[transaction_type]["var"].update(amount)
+
+        if geolocation:
+            cell = self.location_grid_cell(geolocation["lat"], geolocation["lng"])
+            self.location_counts[cell] += 1
+
+    @staticmethod
+    def location_grid_cell(lat: float, lng: float, precision: int = 1) -> tuple[float, float]:
+        return (round(lat, precision), round(lng, precision))
 
     def get_amount_baseline(self, transaction_type: str, min_category_samples: int = 5) -> dict:
         """Layer 1's 'amount deviates from average' check calls THIS, not a
@@ -70,12 +80,18 @@ class CustomerProfile:
         category_baselines = {}
         for transaction_type in self.category_stats:
             category_baselines[transaction_type] = self.get_amount_baseline(transaction_type)
+
+        total_location_txns = sum(self.location_counts.values()) or 1
+        known_location_cells = [
+            [lat, lng] for (lat, lng), count in self.location_counts.items() if count / total_location_txns > 0.15
+        ]
         
         return {
             "category_baselines": category_baselines,
             "typical_hours": typical_hours,
             "known_beneficiaries": list(self.known_beneficiaries),
             "known_bank_codes": list(self.known_bank_codes),
+            "known_location_cells": known_location_cells,
             "transaction_count": self.transaction_count,
             "is_cold_start": self.transaction_count < 10,  # Layer 1 should be more lenient if true
         }
@@ -92,6 +108,7 @@ class CustomerProfile:
             "hour_counts": self.hour_counts,
             "known_beneficiaries": list(self.known_beneficiaries),
             "known_bank_codes": list(self.known_bank_codes),
+            "location_counts": {"{}:{}".format(lat, lng): count for (lat, lng), count in self.location_counts.items()},
             "transaction_count": self.transaction_count,
         })
 
@@ -110,6 +127,10 @@ class CustomerProfile:
         profile.hour_counts = {int(k): v for k, v in data["hour_counts"].items()}
         profile.known_beneficiaries = set(data["known_beneficiaries"])
         profile.known_bank_codes = set(data["known_bank_codes"])
+        profile.location_counts = defaultdict(int)
+        for raw_cell, count in data.get("location_counts", {}).items():
+            lat_str, lng_str = raw_cell.split(":")
+            profile.location_counts[(float(lat_str), float(lng_str))] = count
         profile.transaction_count = data["transaction_count"]
         return profile
 

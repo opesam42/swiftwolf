@@ -39,6 +39,25 @@ class CustomerProfileService:
         # expects a JSON *string*, so re-serialize before handing it over.
         return CustomerProfile.from_json(json.dumps(customer.profile_json))
 
+    def ensure_customer_row(self, customer_id: str) -> None:
+        """Creates a bare Customer row (empty profile) if none exists yet.
+        Needed because Transaction.customer_id has a FK to
+        customers.customer_id, and a customer's very first /v1/score call —
+        before Layer 2 has ever run profile.update()+save() for them — is a
+        completely normal case, not an error. Deliberately does NOT touch
+        Redis: this only satisfies the FK, it is not a baseline write, and
+        Layer 1 must never look like it's updating behavioral state."""
+        from src.core.models import Customer
+
+        customer = self.db.get(Customer, customer_id)
+        if customer is None:
+            self.db.add(Customer(
+                customer_id=customer_id,
+                profile_json=json.loads(CustomerProfile().to_json()),
+                transaction_count=0,
+            ))
+            self.db.flush()
+
     def save(self, customer_id: str, profile: CustomerProfile) -> None:
         """Writes to Postgres always, and to Redis too when a redis_client was
         given — Postgres is the durable source of truth, Redis is Layer 1's
@@ -258,3 +277,167 @@ class TransactionService:
         self.db.add_all(new_rows)
         self.db.commit()
         return len(new_rows)
+
+
+class BlacklistService:
+    """Bridge between blacklisted_accounts (Postgres, source of truth) and a
+    Redis Set cache of active composite (account:bank_code) keys. Layer 1's
+    hot path reads the Redis Set only — same cache-first pattern as
+    CustomerProfileService's baseline, for the same <50ms-budget reason."""
+
+    REDIS_KEY = "blacklist:active_accounts"
+
+    def __init__(self, db_session, redis_client=None):
+        self.db = db_session
+        self.redis = redis_client
+
+    def get_active_keys(self) -> set[str]:
+        """Layer 1's hot-path read. Redis first; falls back to Postgres (and
+        refills Redis from it) on a cache miss — e.g. right after a fresh
+        deploy, before anything has synced yet — same fallback shape as
+        CustomerProfileService.get_cached_baseline()."""
+        if self.redis is not None:
+            cached = self.redis.smembers(self.REDIS_KEY)
+            if cached:
+                return {m.decode() if isinstance(m, bytes) else m for m in cached}
+
+        return self.sync_to_redis()
+
+    def sync_to_redis(self, keys: set[str] | None = None) -> set[str]:
+        """Rebuilds the Redis Set from Postgres. Call this after any blacklist
+        mutation (seeding, an analyst adding/deactivating an entry) so the
+        hot-path cache doesn't silently drift from the source of truth in
+        Postgres. No-ops the Redis write if no redis_client was configured —
+        still returns the freshly-read Postgres set either way."""
+        if keys is None:
+            keys = self._load_active_keys_from_postgres()
+
+        if self.redis is not None:
+            self.redis.delete(self.REDIS_KEY)
+            if keys:
+                self.redis.sadd(self.REDIS_KEY, *keys)
+
+        return keys
+
+    def _load_active_keys_from_postgres(self) -> set[str]:
+        from src.core.models import BlacklistedAccount  # local import avoids a circular dependency with models.py
+
+        rows = self.db.exec(
+            select(BlacklistedAccount).where(BlacklistedAccount.is_active == True)  # noqa: E712
+        ).all()
+        return {f"{row.beneficiary_account}:{row.beneficiary_bank_code}" for row in rows}
+
+
+class ScoreService:
+    """Orchestrates a single POST /v1/score request end to end: idempotency
+    check, cached-baseline read, blacklist read, Layer 1 scoring, and
+    persisting the Transaction + RiskEvent rows. This is the ONLY place that
+    orchestration should live — routes.py stays a thin (de)serialization
+    layer over this, same layering CustomerProfileService/AnomalyDetectorService
+    already establish."""
+
+    def __init__(self, db_session, redis_client=None):
+        self.db = db_session
+        self.profile_service = CustomerProfileService(db_session, redis_client)
+        self.blacklist_service = BlacklistService(db_session, redis_client)
+        self.rule_engine = RuleEngineService()
+
+    def get_cached_decision(self, transaction_reference: str) -> dict | None:
+        """Per the System Design doc's idempotency requirement: if the bank
+        app retries /v1/score for a transaction_reference already scored
+        (e.g. its own request timed out even though SwiftWolf processed it),
+        return the SAME decision rather than re-scoring — session data may
+        have drifted slightly between attempts, and re-scoring could produce
+        an inconsistent result for what the bank app considers one request."""
+        from src.core.models import RiskEvent  # local import avoids a circular dependency with models.py
+
+        existing = self.db.exec(
+            select(RiskEvent).where(RiskEvent.transaction_reference == transaction_reference)
+        ).first()
+        if existing is None:
+            return None
+
+        return {
+            "transaction_reference": existing.transaction_reference,
+            "score": existing.score,
+            "decision": existing.decision,
+            "step_up_method": existing.step_up_method,
+            "reasons": existing.reasons,
+        }
+
+    def score(self, transaction: dict) -> dict:
+        """transaction must carry everything score_transaction() plus the
+        Transaction row need: transaction_reference, customer_id,
+        beneficiary_account, beneficiary_bank_code, amount, timestamp,
+        transaction_type, medium, session, geolocation,
+        last_transaction_timestamp.
+
+        Read-only towards CustomerProfile/River — this is the <50ms hot path,
+        so it never calls profile.update(). That happens later, in the
+        background task on /v1/transactions/settle, per the System Design doc."""
+        from sqlalchemy.exc import IntegrityError
+
+        from src.core.models import RiskEvent, Transaction
+
+        cached = self.get_cached_decision(transaction["transaction_reference"])
+        if cached is not None:
+            return cached
+
+        baseline = self.profile_service.get_cached_baseline(transaction["customer_id"])
+        if baseline is None:
+            # Cache miss (cold cache, or a customer whose baseline hasn't been
+            # written to Redis yet) — fall back to Postgres rather than
+            # scoring against an empty/wrong baseline.
+            profile = self.profile_service.get_or_create(transaction["customer_id"])
+            baseline = profile.to_baseline_dict()
+
+        self.rule_engine.blacklisted_accounts = self.blacklist_service.get_active_keys()
+        result = self.rule_engine.score(transaction, baseline)
+
+        # Satisfies Transaction.customer_id's FK for a brand-new customer's
+        # very first /v1/score call — NOT a profile/baseline write.
+        self.profile_service.ensure_customer_row(transaction["customer_id"])
+
+        txn_row = Transaction(
+            transaction_reference=transaction["transaction_reference"],
+            customer_id=transaction["customer_id"],
+            direction="debit",  # /v1/score only ever scores outgoing transfers
+            amount=transaction["amount"],
+            beneficiary_account=transaction["beneficiary_account"],
+            beneficiary_bank_code=transaction["beneficiary_bank_code"],
+            transaction_type=transaction["transaction_type"],
+            medium=transaction["medium"],
+            occurred_at=transaction["timestamp"],
+        )
+        risk_event = RiskEvent(
+            transaction_reference=transaction["transaction_reference"],
+            customer_id=transaction["customer_id"],
+            score=result["score"],
+            decision=result["decision"],
+            step_up_method=result["step_up_method"],
+            reasons=result["reasons"],
+        )
+
+        try:
+            self.db.add(txn_row)
+            self.db.flush()  # Transaction row must exist before RiskEvent's FK references it
+            self.db.add(risk_event)
+            self.db.commit()
+        except IntegrityError:
+            # Concurrent retry landed between our idempotency check and this
+            # commit — someone else already persisted this transaction_reference.
+            # Don't surface a 500 for what is, from the bank app's perspective,
+            # a legitimate retry; return the decision that actually won.
+            self.db.rollback()
+            cached = self.get_cached_decision(transaction["transaction_reference"])
+            if cached is not None:
+                return cached
+            raise
+
+        return {
+            "transaction_reference": transaction["transaction_reference"],
+            "score": result["score"],
+            "decision": result["decision"],
+            "step_up_method": result["step_up_method"],
+            "reasons": result["reasons"],
+        }

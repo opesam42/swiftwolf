@@ -45,12 +45,16 @@ class ScoreResponse(BaseModel):
     step_up_method: Optional[Literal["bvn_liveness", "security_question", "otp"]] = None
     reasons: list[
         Literal[
+            "blacklisted_account",
             "new_beneficiary",
+            "new_bank",
             "amount_deviation",
             "unusual_hour",
             "bot_speed_timing",
             "active_call",
+            "pasted_new_beneficiary",
             "dormant_account_spike",
-            "location_deviation",
+            "location_deviation_major",
+            "location_deviation_minor",
         ]
     ] = Field(default_factory=list)

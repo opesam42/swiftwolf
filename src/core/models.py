@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, LargeBinary, Numeric
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Index, LargeBinary, Numeric, Text, text
 from sqlalchemy import JSON as SAJSON
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -150,9 +150,51 @@ class AnomalyModelState(SQLModel, table=True):
     )
     flag_threshold: float = Field(
         sa_column=Column(Numeric(6, 4), nullable=False,
-                          comment="Set by calibrate_threshold() against real seed data — "
-                                  "not a hardcoded guess. Recalibrate when seed volume changes."),
+                          comment="Set by ZScoreAnomalyDetector.calibrate_from_scores() against "
+                                  "real seed data — not a hardcoded guess. Recalibrate when seed volume changes."),
     )
     learned_count: int = Field(default=0)
     skipped_count: int = Field(default=0)
     updated_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
+
+
+class BlacklistedAccount(SQLModel, table=True):
+    # TODO - might need to add account name to the fields so Praise can use that for his account lookup table
+    __tablename__ = "blacklisted_accounts"
+    __table_args__ = (
+        # Partial unique index, not a plain unique constraint — the same
+        # (account, bank_code) pair can be blacklisted, deactivated, and later
+        # blacklisted again without violating uniqueness, since only ACTIVE
+        # rows are constrained. Deactivated rows stay around as audit history.
+        Index(
+            "idx_blacklist_active_composite",
+            "beneficiary_account",
+            "beneficiary_bank_code",
+            unique=True,
+            postgresql_where=text("is_active = true"),
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, sa_column=Column(BigInteger, primary_key=True, autoincrement=True))
+    beneficiary_account: str = Field(max_length=20)
+    beneficiary_bank_code: str = Field(max_length=10)
+    reason: str = Field(
+        max_length=50,
+        sa_column_kwargs={"comment": "'confirmed_fraud', 'nibss_watchlist', or 'manual_flag'."},
+    )
+    source: str = Field(
+        max_length=50,
+        sa_column_kwargs={"comment": "'analyst', 'nibss_sync', or 'layer2_confirmed_fraud'."},
+    )
+    is_active: bool = Field(
+        default=True,
+        sa_column=Column(Boolean, nullable=False, server_default=text("true"),
+                          comment="Soft-delete flag — never hard-delete a blacklist row, "
+                                  "the audit trail of who was blacklisted (and when) matters."),
+    )
+    added_at: datetime = Field(default_factory=utcnow, sa_column=Column(DateTime(timezone=True), nullable=False))
+    added_by: Optional[str] = Field(
+        default=None, max_length=64,
+        sa_column_kwargs={"comment": "Analyst id, or system name if added automatically."},
+    )
+    notes: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))

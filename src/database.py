@@ -5,6 +5,12 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from src.config import settings
 
+# SQLModel.metadata only knows about a table once its model class has been
+# imported somewhere — importing here (rather than relying on main.py/routes.py
+# or a job script to have done it first) guarantees create_db_and_tables()
+# always sees every table, regardless of which entrypoint calls it.
+from src.core import models  # noqa: F401
+
 DATABASE_URL = settings.DATABASE_URL
 
 

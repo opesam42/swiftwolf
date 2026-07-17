@@ -25,7 +25,8 @@ def _nearest_known_distance_km(lat: float, lng: float, known_cells: list[tuple[f
 
 def score_transaction(transaction: dict[str, Any], baseline: dict[str, Any], blacklisted_accounts: set[str]) -> dict[str, Any]:
     """Pure arithmetic against a cached baseline — no DB calls, no ML inference."""
-    if transaction["beneficiary_account"] in blacklisted_accounts:
+    beneficiary_key = f"{transaction['beneficiary_account']}:{transaction['beneficiary_bank_code']}"
+    if beneficiary_key in blacklisted_accounts:  # blacklisted_accounts should now hold composite keys too
         return {
             "score": 999,
             "decision": "BLOCK",
@@ -78,7 +79,14 @@ def score_transaction(transaction: dict[str, Any], baseline: dict[str, Any], bla
         if isinstance(last_ts, str):
             last_ts = last_ts.replace("Z", "+00:00")
             last_ts = datetime.fromisoformat(last_ts)
-        dormancy_days = (transaction["timestamp"] - last_ts).days
+        current_ts = transaction["timestamp"]
+        # Normalize: if one side is naive and the other isn't, force both naive
+        # for comparison purposes — safer than assuming either side's tz-awareness
+        if last_ts.tzinfo is not None and current_ts.tzinfo is None:
+            last_ts = last_ts.replace(tzinfo=None)
+        elif last_ts.tzinfo is None and current_ts.tzinfo is not None:
+            current_ts = current_ts.replace(tzinfo=None)
+        dormancy_days = (current_ts - last_ts).days
         if dormancy_days > 30:
             score += 20
             reasons.append("dormant_account_spike")

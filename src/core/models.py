@@ -90,6 +90,15 @@ class Transaction(SQLModel, table=True):
         default=None, max_length=30,
         sa_column_kwargs={"comment": "NULL until settle, same timing as final_status."},
     )
+    geolocation_lat: Optional[float] = Field(
+        default=None,
+        sa_column_kwargs={"comment": "From /v1/score's geolocation field — NULL when permission "
+                                       "was denied or medium is ussd/atm_withdrawal. Persisted here "
+                                       "(not just used transiently at score time) so settle's "
+                                       "background task can read it back and feed "
+                                       "CustomerProfile.location_counts from real traffic."},
+    )
+    geolocation_lng: Optional[float] = Field(default=None)
     occurred_at: datetime = Field(
         sa_column=Column(DateTime(timezone=True), nullable=False,
                           comment="The transaction's OWN timestamp, distinct from "

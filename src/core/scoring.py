@@ -37,6 +37,14 @@ def score_transaction(transaction: dict[str, Any], baseline: dict[str, Any], bla
     score = 0
     reasons: list[str] = []
 
+    # Simpler, single-model stand-in for Part 2C's champion/challenger rebase —
+    # a customer whose most recent step-up verification failed gets scrutinized
+    # harder on every subsequent transaction until CustomerProfile.risk_tier is
+    # reset (not built yet — a named scope gap, see CustomerProfile.elevate_risk).
+    if baseline.get("risk_tier") == "elevated":
+        score += 15
+        reasons.append("elevated_risk_tier")
+
     beneficiary_key = f"{transaction['beneficiary_account']}:{transaction['beneficiary_bank_code']}"
 
     if beneficiary_key not in baseline.get("known_beneficiaries", []):

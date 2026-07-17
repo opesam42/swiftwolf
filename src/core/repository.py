@@ -27,6 +27,12 @@ class CustomerProfile:
         self.known_bank_codes = set()
         self.location_counts = defaultdict(int)
         self.transaction_count = 0
+        # Simpler, single-model stand-in for Part 2C's champion/challenger
+        # rebase (not built this pass) — a failed step-up verification is
+        # enough evidence to scrutinize this customer's future transactions
+        # harder, without needing a second model. Never resets back to
+        # "normal" once elevated — a named, stated scope gap, not an oversight.
+        self.risk_tier = "normal"
 
         # THIS is what Layer 1's amount-deviation check actually uses now —
         # per-category mean/variance, not a blended global figure.
@@ -50,6 +56,12 @@ class CustomerProfile:
     @staticmethod
     def location_grid_cell(lat: float, lng: float, precision: int = 1) -> tuple[float, float]:
         return (round(lat, precision), round(lng, precision))
+
+    def elevate_risk(self) -> None:
+        """Called on a failed step-up verification (liveness/security
+        question/OTP) at settle time — NOT on 'abandoned', which just means
+        the customer walked away, not that an identity claim was rejected."""
+        self.risk_tier = "elevated"
 
     def get_amount_baseline(self, transaction_type: str, min_category_samples: int = 5) -> dict:
         """Layer 1's 'amount deviates from average' check calls THIS, not a
@@ -94,6 +106,7 @@ class CustomerProfile:
             "known_location_cells": known_location_cells,
             "transaction_count": self.transaction_count,
             "is_cold_start": self.transaction_count < 10,  # Layer 1 should be more lenient if true
+            "risk_tier": self.risk_tier,
         }
 
     def to_json(self) -> str:
@@ -110,6 +123,7 @@ class CustomerProfile:
             "known_bank_codes": list(self.known_bank_codes),
             "location_counts": {"{}:{}".format(lat, lng): count for (lat, lng), count in self.location_counts.items()},
             "transaction_count": self.transaction_count,
+            "risk_tier": self.risk_tier,
         })
 
     @classmethod
@@ -132,6 +146,7 @@ class CustomerProfile:
             lat_str, lng_str = raw_cell.split(":")
             profile.location_counts[(float(lat_str), float(lng_str))] = count
         profile.transaction_count = data["transaction_count"]
+        profile.risk_tier = data.get("risk_tier", "normal")  # default for profiles seeded before this field existed
         return profile
 
 

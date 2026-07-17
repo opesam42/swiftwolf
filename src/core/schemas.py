@@ -46,6 +46,7 @@ class ScoreResponse(BaseModel):
     reasons: list[
         Literal[
             "blacklisted_account",
+            "elevated_risk_tier",
             "new_beneficiary",
             "new_bank",
             "amount_deviation",
@@ -58,3 +59,25 @@ class ScoreResponse(BaseModel):
             "location_deviation_minor",
         ]
     ] = Field(default_factory=list)
+
+
+class SettleRequest(BaseModel):
+    transaction_reference: str
+    customer_id: str
+    final_status: Literal["completed", "failed", "abandoned"]
+    verification_outcome: Literal[
+        "not_required", "passed", "liveness_failed", "security_question_failed", "otp_failed", "abandoned"
+    ]
+    # amount/beneficiary_account/medium are accepted for contract fidelity with
+    # the bank app's documented payload, but NOT used for Layer 2 logic — the
+    # Transaction row already stored at /v1/score time is the source of truth.
+    amount: float
+    beneficiary_account: str
+    medium: Literal["app", "ussd", "atm_withdrawal", "online_payment"]
+    timestamp: datetime
+    nibss_reference: Optional[str] = None
+
+
+class SettleResponse(BaseModel):
+    transaction_reference: str
+    status: Literal["accepted", "already_processed"]

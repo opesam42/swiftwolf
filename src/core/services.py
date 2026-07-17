@@ -398,6 +398,7 @@ class ScoreService:
         # very first /v1/score call — NOT a profile/baseline write.
         self.profile_service.ensure_customer_row(transaction["customer_id"])
 
+        geolocation = transaction.get("geolocation")
         txn_row = Transaction(
             transaction_reference=transaction["transaction_reference"],
             customer_id=transaction["customer_id"],
@@ -408,6 +409,11 @@ class ScoreService:
             transaction_type=transaction["transaction_type"],
             medium=transaction["medium"],
             occurred_at=transaction["timestamp"],
+            # Persisted (not just used transiently for this score) so settle's
+            # background task can read it back and keep location_counts
+            # growing from real traffic, not just CSV seeding.
+            geolocation_lat=geolocation["lat"] if geolocation else None,
+            geolocation_lng=geolocation["lng"] if geolocation else None,
         )
         risk_event = RiskEvent(
             transaction_reference=transaction["transaction_reference"],
@@ -441,3 +447,105 @@ class ScoreService:
             "step_up_method": result["step_up_method"],
             "reasons": result["reasons"],
         }
+
+
+class SettleService:
+    """Orchestrates POST /v1/transactions/settle. Split into a fast,
+    synchronous part (apply_settlement — durably record the real-world
+    outcome) and a slower background part (run_layer2 — River baseline update
+    + anomaly detector scoring), matching the System Design doc's Section 5:
+    the bank app doesn't wait on Layer 2, only on the outcome being recorded."""
+
+    # verification_outcome values that mean an identity claim was actually
+    # REJECTED — not "abandoned", which just means the customer walked away
+    # and proves nothing about whether they were legitimate.
+    FAILED_VERIFICATION_OUTCOMES = {"liveness_failed", "security_question_failed", "otp_failed"}
+
+    def __init__(self, db_session, redis_client=None):
+        self.db = db_session
+        self.profile_service = CustomerProfileService(db_session, redis_client)
+        self.anomaly_service = AnomalyDetectorService(db_session)
+
+    def get_transaction(self, transaction_reference: str):
+        from src.core.models import Transaction  # local import avoids a circular dependency with models.py
+
+        return self.db.exec(
+            select(Transaction).where(Transaction.transaction_reference == transaction_reference)
+        ).first()
+
+    def apply_settlement(self, txn, final_status: str, verification_outcome: str, nibss_reference: str | None) -> None:
+        """The fast, synchronous part — just persists the real-world outcome.
+        Caller is responsible for the idempotency check (txn.final_status was
+        still None) before calling this; this method itself doesn't re-check."""
+        txn.final_status = final_status
+        txn.verification_outcome = verification_outcome
+        txn.nibss_reference = nibss_reference
+        self.db.add(txn)
+        self.db.commit()
+
+    def run_layer2(self, transaction_reference: str, final_status: str, verification_outcome: str) -> None:
+        """Background-task body — called with its OWN db/redis (see
+        routes._run_settle_background), never the request-scoped session.
+
+        Two independent gates on the SAME profile load:
+          - a failed step-up verification elevates risk_tier, regardless of
+            final_status (a rejected identity claim is a rejected identity
+            claim even if the transfer itself technically completed via some
+            other path)
+          - River/anomaly learning only runs when final_status == "completed"
+            — a failed/abandoned transfer never moved real money, so it must
+            not shape the spending baseline or train the anomaly model
+        Saved once at the end if either gate actually changed anything."""
+        from src.core.models import RiskEvent
+
+        txn = self.get_transaction(transaction_reference)
+        if txn is None:
+            return  # shouldn't happen — the endpoint already validated this exists
+
+        profile = self.profile_service.get_or_create(txn.customer_id)
+        changed = False
+
+        if verification_outcome in self.FAILED_VERIFICATION_OUTCOMES:
+            profile.elevate_risk()
+            changed = True
+
+        if final_status == "completed":
+            geolocation = None
+            if txn.geolocation_lat is not None and txn.geolocation_lng is not None:
+                geolocation = {"lat": txn.geolocation_lat, "lng": txn.geolocation_lng}
+
+            beneficiary_key = f"{txn.beneficiary_account}:{txn.beneficiary_bank_code}"
+            transaction_dict = {
+                "transaction_type": txn.transaction_type,
+                "amount": float(txn.amount),
+                "timestamp": txn.occurred_at,
+                "new_beneficiary": beneficiary_key not in profile.known_beneficiaries,
+            }
+
+            # CRITICAL ORDERING: the anomaly detector reads profile's CURRENT
+            # baseline before profile.update() touches it — same rule as
+            # everywhere else this codebase does River + anomaly scoring together.
+            result = self.anomaly_service.score_transaction(transaction_dict, profile)
+
+            risk_event = self.db.exec(
+                select(RiskEvent).where(RiskEvent.transaction_reference == transaction_reference)
+            ).first()
+            if risk_event is not None:
+                risk_event.anomaly_score = result["score"]
+                risk_event.anomaly_flagged = result["flagged"]
+                risk_event.anomaly_zscore = result["zscore"]
+                risk_event.baseline_source = result["baseline_source"]
+                self.db.add(risk_event)
+
+            profile.update(
+                amount=float(txn.amount),
+                hour=txn.occurred_at.hour,
+                beneficiary_account=txn.beneficiary_account,
+                beneficiary_bank_code=txn.beneficiary_bank_code,
+                transaction_type=txn.transaction_type,
+                geolocation=geolocation,
+            )
+            changed = True
+
+        if changed:
+            self.profile_service.save(txn.customer_id, profile)

@@ -68,3 +68,4 @@ Thumbs.db
 docs/internal/
 jobs/files/
 *.db
+*.sql

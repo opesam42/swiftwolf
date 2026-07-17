@@ -25,6 +25,12 @@ class CustomerProfile:
         # not "have they used this exact account before." A new account at a
         # familiar bank is a smaller signal than a new account at an unfamiliar one.
         self.known_bank_codes = set()
+        # "account:bank_code" -> beneficiary_name, latest-seen wins. Not used
+        # for any scoring signal (that's still purely the composite key in
+        # known_beneficiaries) — this exists so a resolved name (from Praise's
+        # account lookup, or the CSV extraction) survives on the profile for
+        # future Layer 3 merchant-matching, instead of being discarded.
+        self.beneficiary_names: dict[str, str] = {}
         self.location_counts = defaultdict(int)
         self.transaction_count = 0
         # Simpler, single-model stand-in for Part 2C's champion/challenger
@@ -39,12 +45,16 @@ class CustomerProfile:
         self.category_stats = defaultdict(lambda: {"mean": stats.Mean(), "var": stats.Var()})
 
     def update(self, amount: float, hour: int, beneficiary_account: str,
-               beneficiary_bank_code: str, transaction_type: str, geolocation: dict | None = None):
+               beneficiary_bank_code: str, transaction_type: str, geolocation: dict | None = None,
+               beneficiary_name: str | None = None):
         self.global_mean.update(amount)
         self.global_var.update(amount)
         self.hour_counts[hour] += 1
-        self.known_beneficiaries.add(f"{beneficiary_account}:{beneficiary_bank_code}")
+        beneficiary_key = f"{beneficiary_account}:{beneficiary_bank_code}"
+        self.known_beneficiaries.add(beneficiary_key)
         self.known_bank_codes.add(beneficiary_bank_code)
+        if beneficiary_name:
+            self.beneficiary_names[beneficiary_key] = beneficiary_name
         self.transaction_count += 1
         self.category_stats[transaction_type]["mean"].update(amount)
         self.category_stats[transaction_type]["var"].update(amount)
@@ -104,6 +114,7 @@ class CustomerProfile:
             "known_beneficiaries": list(self.known_beneficiaries),
             "known_bank_codes": list(self.known_bank_codes),
             "known_location_cells": known_location_cells,
+            "beneficiary_names": dict(self.beneficiary_names),
             "transaction_count": self.transaction_count,
             "is_cold_start": self.transaction_count < 10,  # Layer 1 should be more lenient if true
             "risk_tier": self.risk_tier,
@@ -122,6 +133,7 @@ class CustomerProfile:
             "known_beneficiaries": list(self.known_beneficiaries),
             "known_bank_codes": list(self.known_bank_codes),
             "location_counts": {"{}:{}".format(lat, lng): count for (lat, lng), count in self.location_counts.items()},
+            "beneficiary_names": dict(self.beneficiary_names),
             "transaction_count": self.transaction_count,
             "risk_tier": self.risk_tier,
         })
@@ -147,6 +159,7 @@ class CustomerProfile:
             profile.location_counts[(float(lat_str), float(lng_str))] = count
         profile.transaction_count = data["transaction_count"]
         profile.risk_tier = data.get("risk_tier", "normal")  # default for profiles seeded before this field existed
+        profile.beneficiary_names = dict(data.get("beneficiary_names", {}))  # same default reasoning
         return profile
 
 

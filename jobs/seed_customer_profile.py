@@ -98,6 +98,9 @@ def seed_profile(
             amount=amount,
             beneficiary_account=row["beneficiary_account"],
             beneficiary_bank_code=row["beneficiary_bank_code"],
+            # .get(), not [] — older seed CSVs generated before this column
+            # existed shouldn't crash the whole job on a missing key.
+            beneficiary_name=row.get("beneficiary_name"),
             transaction_type=row["transaction_type"],
             medium=TransactionService.MEDIUM_HISTORICAL_SEED,
             occurred_at=timestamp,
@@ -115,6 +118,7 @@ def seed_profile(
             "timestamp": timestamp,
             "beneficiary_account": row["beneficiary_account"],
             "beneficiary_bank_code": row["beneficiary_bank_code"],
+            "beneficiary_name": row.get("beneficiary_name"),
         })
 
     # Bulk pattern for BOTH stateful models: ONE Postgres read each, loop
@@ -153,6 +157,7 @@ def seed_profile(
             beneficiary_account=t["beneficiary_account"],
             beneficiary_bank_code=t["beneficiary_bank_code"],
             transaction_type=t["transaction_type"],
+            beneficiary_name=t["beneficiary_name"],
         )
         seeded += 1
 

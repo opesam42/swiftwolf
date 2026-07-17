@@ -103,6 +103,7 @@ class CustomerProfileService:
         self, customer_id: str, amount: float, hour: int,
         beneficiary_account: str, beneficiary_bank_code: str,
         transaction_type: str, direction: str, timestamp, geolocation: dict | None = None,
+        beneficiary_name: str | None = None,
     ) -> CustomerProfile:
         """Wraps the full load -> update -> save cycle in one call. This is
         what the settle background task should actually call — NOT
@@ -116,6 +117,7 @@ class CustomerProfileService:
             beneficiary_account=beneficiary_account, beneficiary_bank_code=beneficiary_bank_code,
             transaction_type=transaction_type,
             geolocation=geolocation,
+            beneficiary_name=beneficiary_name,
         )
         self.save(customer_id, profile)
         return profile
@@ -545,6 +547,9 @@ class SettleService:
                 beneficiary_bank_code=txn.beneficiary_bank_code,
                 transaction_type=txn.transaction_type,
                 geolocation=geolocation,
+                # Read back from the Transaction row (persisted at /v1/score
+                # time) — same pattern as geolocation_lat/lng above.
+                beneficiary_name=txn.beneficiary_name,
             )
             changed = True
 

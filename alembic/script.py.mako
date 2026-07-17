@@ -9,6 +9,8 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+import sqlmodel  # needed for SQLModel-specific column types (e.g. AutoString) that
+                 # autogenerate renders into migrations but doesn't import for you
 ${imports if imports else ""}
 
 # revision identifiers, used by Alembic.

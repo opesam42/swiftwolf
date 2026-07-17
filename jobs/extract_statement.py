@@ -175,14 +175,15 @@ def parse_statement_rows(
 
         # Extract beneficiary info
         beneficiary_name = extract_beneficiary_name(detail)
-        if txn_type in ("data", "airtime"):
+        if txn_type in ("data", "airtime", "electricity"):
             # Airtime/data purchases go to a telco billing aggregator, not a
             # real NUBAN at a bank — synthesizing a fake bank account here
             # would misleadingly imply this went to a real beneficiary
             # account (e.g. "this data purchase went to First Bank account
             # 7088979964"), which isn't how these transactions work at all.
             beneficiary_account = None
-            bank_code, bank_name = TELCO_AGGREGATOR_BANK_CODE, TELCO_AGGREGATOR_BANK_NAME
+            beneficiary_bank_code = None
+            beneficiary_name = None
         else:
             beneficiary_account = synthetic_account_number(beneficiary_name)
             bank_code, bank_name = synthetic_bank(beneficiary_name, detail)
@@ -194,6 +195,7 @@ def parse_statement_rows(
                 "timestamp": timestamp,
                 "amount": amount,
                 "direction": direction,
+                "beneficiary_name": beneficiary_name,
                 "beneficiary_account": beneficiary_account,
                 "beneficiary_bank_code": bank_code,
                 "transaction_type": txn_type,

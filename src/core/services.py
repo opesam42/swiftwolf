@@ -406,6 +406,7 @@ class ScoreService:
             amount=transaction["amount"],
             beneficiary_account=transaction["beneficiary_account"],
             beneficiary_bank_code=transaction["beneficiary_bank_code"],
+            beneficiary_name=transaction.get("beneficiary_name"),  # was silently dropped before
             transaction_type=transaction["transaction_type"],
             medium=transaction["medium"],
             occurred_at=transaction["timestamp"],
@@ -549,3 +550,47 @@ class SettleService:
 
         if changed:
             self.profile_service.save(txn.customer_id, profile)
+
+
+class BeneficiaryExportService:
+    """Extracts the distinct set of beneficiaries a customer has actually
+    transacted with, from real Transaction rows — the live replacement for
+    manually handing Praise a CSV. Praise's app calls this (via
+    GET /v1/internal/beneficiaries) to populate his own beneficiaries table
+    for Path A's instant-lookup demo path, instead of us re-exporting a fresh
+    CSV by hand every time seed data changes."""
+
+    def __init__(self, db_session):
+        self.db = db_session
+
+    def get_distinct_beneficiaries(self, customer_id: str | None = None) -> list[dict]:
+        from src.core.models import Transaction
+
+        query = (
+            select(
+                Transaction.beneficiary_account,
+                Transaction.beneficiary_bank_code,
+                Transaction.beneficiary_name,
+            )
+            .distinct()
+            .where(
+                # Excludes the telco-aggregator sentinel rows from the
+                # airtime/data extraction fix — there's nothing meaningful for
+                # Praise's beneficiaries table to cache for those; they were
+                # never a real NUBAN beneficiary in the first place.
+                Transaction.beneficiary_account.is_not(None),
+            )
+        )
+
+        if customer_id:
+            query = query.where(Transaction.customer_id == customer_id)
+
+        rows = self.db.exec(query).all()
+        return [
+            {
+                "beneficiary_account": r[0],
+                "beneficiary_bank_code": r[1],
+                "beneficiary_name": r[2],
+            }
+            for r in rows
+        ]

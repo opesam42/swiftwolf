@@ -55,6 +55,7 @@ class Transaction(SQLModel, table=True):
                                        "credit feeds income_mean separately — never blended."},
     )
     amount: float = Field(sa_column=Column(Numeric(14, 2), nullable=False))
+    beneficiary_name: Optional[str] = Field(default=None, max_length=100)
     beneficiary_account: Optional[str] = Field(default=None, max_length=20)
     beneficiary_bank_code: Optional[str] = Field(
         default=None, max_length=10,

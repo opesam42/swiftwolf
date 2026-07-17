@@ -1,10 +1,8 @@
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from sqlmodel import select
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 
 from src.core.auth import verify_api_key
-from src.core.models import Transaction
 from src.core.schemas import ScoreRequest, ScoreResponse, SettleRequest, SettleResponse
-from src.core.services import ScoreService, SettleService
+from src.core.services import BeneficiaryExportService, ScoreService, SettleService
 from src.database import SessionDep
 from src.redis import RedisDep
 
@@ -38,6 +36,7 @@ async def score_transaction_endpoint(request: ScoreRequest, db: SessionDep, redi
         "customer_id": request.customer_id,
         "beneficiary_account": request.beneficiary_account,
         "beneficiary_bank_code": request.beneficiary_bank_code,
+        "beneficiary_name": request.beneficiary_name,
         "amount": request.amount,
         "timestamp": request.timestamp,
         "last_transaction_timestamp": request.last_transaction_timestamp,
@@ -78,5 +77,22 @@ async def settle_transaction_endpoint(request: SettleRequest, background_tasks: 
     )
 
     return SettleResponse(transaction_reference=request.transaction_reference, status="accepted")
+
+
+@router.get("/internal/beneficiaries")
+async def export_beneficiaries(db: SessionDep, customer_id: str | None = Query(default=None)):
+    """Live replacement for manually handing Praise a CSV: he hits this (same
+    X-SwiftWolf-Key auth as every other endpoint on this router) to get the
+    current distinct beneficiary set — straight from real Transaction rows,
+    never stale — and upserts it into his own beneficiaries table for Path A's
+    instant-lookup demo path.
+
+    Reuses the same API key as /v1/score and /v1/transactions/settle rather
+    than a separate internal-only key — a deliberate hackathon scope choice
+    (bulk export vs. per-transaction scoring are different access shapes in
+    principle), not an oversight."""
+    service = BeneficiaryExportService(db)
+    beneficiaries = service.get_distinct_beneficiaries(customer_id)
+    return {"beneficiaries": beneficiaries, "count": len(beneficiaries)}
 
 

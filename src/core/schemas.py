@@ -21,6 +21,7 @@ class ScoreRequest(BaseModel):
     new_beneficiary: bool
     beneficiary_account: str
     beneficiary_bank_code: str
+    beneficiary_name: Optional[str] = None  # from Praise's account-lookup result; may be absent/unresolved
     amount: float
     timestamp: datetime
     last_transaction_timestamp: Optional[datetime] # that catches dormant account

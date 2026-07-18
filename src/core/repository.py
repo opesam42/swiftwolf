@@ -140,16 +140,34 @@ class CustomerProfile:
 
     @classmethod
     def from_json(cls, raw: str) -> "CustomerProfile":
-        """Rehydrate from Postgres on load. Note: River's Mean/Var objects don't
-        natively support restoring internal state, so we reconstruct manually."""
+        """Rehydrate from Postgres on load, using River's own _from_state()
+        classmethods (Mean._from_state(n, mean), Var._from_state(n, mean, var))
+        rather than poking internal attributes by hand.
+
+        FIXED — this used to set `._n` (with a leading underscore) on both
+        global_mean and every category's mean, but River's real attribute is
+        `.n` with NO underscore (confirmed via River's own source: Mean.__init__
+        sets `self.n = 0`, not `self._n`). That silently created a dead,
+        never-read attribute, leaving the real `.n` stuck at 0 after every
+        reload. `.get()` still looked correct immediately after reload (`._mean`
+        WAS the right attribute name), but the very next `.update()` call would
+        divide by the broken n=0-turned-1 and completely overwrite the restored
+        mean with just that one new value — silently discarding every
+        previously-accumulated sample. Var had a second, independent version of
+        the same bug: Var has no `._mean` attribute at all (it wraps a nested
+        `.mean` Mean object plus a running `._S` sum), so variance restoration
+        never actually worked, not just "approximately" as this comment used to
+        claim. Both are fixed by using River's own reconstruction classmethods
+        instead of guessing attribute names."""
         data = json.loads(raw)
         profile = cls()
-        profile.global_mean._mean = data["global_mean"]
-        profile.global_mean._n = data["global_n"]
+        profile.global_mean = stats.Mean._from_state(data["global_n"], data["global_mean"])
+        profile.global_var = stats.Var._from_state(data["global_n"], data["global_mean"], data["global_var"])
         for t, s in data["category_stats"].items():
-            profile.category_stats[t]["mean"]._mean = s["mean"]
-            profile.category_stats[t]["mean"]._n = s["n"]
-            profile.category_stats[t]["var"]._mean = s["var"]  # approximate restore, see note below
+            profile.category_stats[t] = {
+                "mean": stats.Mean._from_state(s["n"], s["mean"]),
+                "var": stats.Var._from_state(s["n"], s["mean"], s["var"]),
+            }
         profile.hour_counts = {int(k): v for k, v in data["hour_counts"].items()}
         profile.known_beneficiaries = set(data["known_beneficiaries"])
         profile.known_bank_codes = set(data["known_bank_codes"])

@@ -491,12 +491,19 @@ class SettleService:
         self.db.commit()
 
     def run_layer2(self, transaction_reference: str, final_status: str, verification_outcome: str) -> None:
-        """Extracts the distinct set of beneficiaries across ALL customers'
-    transaction history, plus active blacklisted accounts — the live
-    replacement for manually handing Praise a CSV. Praise's app calls this
-    (via GET /v1/internal/beneficiaries) to populate his own beneficiaries
-    table for Path A's instant-lookup demo path, instead of us re-exporting
-    a fresh CSV by hand every time seed data changes across the team."""
+        """Background-task body — called with its OWN db/redis (see
+        routes._run_settle_background), never the request-scoped session.
+
+        Two independent gates on the SAME profile load:
+        - a failed step-up verification elevates risk_tier, regardless of
+            final_status (a rejected identity claim is a rejected identity
+            claim even if the transfer itself technically completed via some
+            other path)
+        - River/anomaly learning only runs when final_status == "completed"
+            — a failed/abandoned transfer never moved real money, so it must
+            not shape the spending baseline or train the anomaly model
+        Saved once at the end if either gate actually changed anything."""
+        
         from src.core.models import RiskEvent
 
         txn = self.get_transaction(transaction_reference)

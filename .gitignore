@@ -70,3 +70,4 @@ jobs/files/
 *.db
 *.sql
 *.dump
+*.png

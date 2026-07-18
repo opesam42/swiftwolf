@@ -668,37 +668,97 @@ class InsightsService:
             "is_low_friction_customer": proceed_rate > 0.9,
         }
 
-    def get_spending_delta(self, customer_id: str) -> dict:
+    # def get_spending_delta(self, customer_id: str) -> dict:
+    #     """Compares this week's actual spend in each category against the
+    #     customer's own baseline average — reuses
+    #     CustomerProfile.get_amount_baseline() directly rather than any new
+    #     statistical logic. Named limitation: avg_amount reflects all-time
+    #     history, not a rolling window, so a customer whose habits genuinely
+    #     shifted will show a false "deviation" until enough new data dilutes
+    #     the old average."""
+    #     from src.core.models import Transaction
+
+    #     profile = CustomerProfileService(self.db).get_or_create(customer_id)
+
+    #     week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    #     recent = self.db.exec(
+    #         select(Transaction).where(
+    #             Transaction.customer_id == customer_id,
+    #             Transaction.direction == "debit",
+    #             Transaction.occurred_at >= week_ago,
+    #         )
+    #     ).all()
+
+    #     by_category: dict[str, float] = defaultdict(float)
+    #     for t in recent:
+    #         by_category[t.transaction_type] += float(t.amount)
+
+    #     insights = []
+    #     for category, spent in by_category.items():
+    #         baseline = profile.get_amount_baseline(category)
+    #         avg = baseline["avg_amount"]
+    #         if avg > 0 and spent > avg * 1.5:
+    #             pct_over = round((spent / avg - 1) * 100)
+    #             insights.append(f"You've spent NGN{spent:,.0f} on {category} this week - {pct_over}% above your usual.")
+
+    #     return {"customer_id": customer_id, "insights": insights}
+
+    def get_spending_delta(self, customer_id: str, lookback_weeks: int = 8) -> dict:
         """Compares this week's actual spend in each category against the
-        customer's own baseline average — reuses
-        CustomerProfile.get_amount_baseline() directly rather than any new
-        statistical logic. Named limitation: avg_amount reflects all-time
-        history, not a rolling window, so a customer whose habits genuinely
-        shifted will show a false "deviation" until enough new data dilutes
-        the old average."""
+        AVERAGE OF PAST WEEKLY TOTALS in that category — NOT
+        CustomerProfile.get_amount_baseline(), which is a per-transaction
+        average and is the wrong quantity to compare a weekly sum against.
+
+        BUG FIXED: the previous version compared this week's SUM against a
+        PER-TRANSACTION average, which meant any customer with more than 1-2
+        transactions per week would show as "hundreds of percent above usual"
+        even with perfectly typical spending — verified: 9 completely ordinary
+        transactions in a week were reported as "800% above your usual" under
+        the old logic. Fixed by comparing sum-to-sum (this week's total vs.
+        average of past weeks' totals) instead of sum-to-per-item-average.
+        """
         from src.core.models import Transaction
 
-        profile = CustomerProfileService(self.db).get_or_create(customer_id)
+        now = datetime.now(timezone.utc)
+        week_start = now - timedelta(days=7)
+        lookback_start = now - timedelta(weeks=lookback_weeks + 1)
 
-        week_ago = datetime.now(timezone.utc) - timedelta(days=7)
-        recent = self.db.exec(
+        # Single query covers both this week and the lookback window — no need
+        # to call CustomerProfileService/get_amount_baseline() at all here.
+        txns = self.db.exec(
             select(Transaction).where(
                 Transaction.customer_id == customer_id,
                 Transaction.direction == "debit",
-                Transaction.occurred_at >= week_ago,
+                Transaction.occurred_at >= lookback_start,
             )
         ).all()
 
-        by_category: dict[str, float] = defaultdict(float)
-        for t in recent:
-            by_category[t.transaction_type] += float(t.amount)
+        # Bucket every transaction into (category, week_number) — week 0 is
+        # this week, weeks 1..lookback_weeks are the historical comparison window.
+        by_category_week: dict[str, dict[int, float]] = defaultdict(lambda: defaultdict(float))
+        for t in txns:
+            weeks_ago = (now - t.occurred_at).days // 7
+            if weeks_ago > lookback_weeks:
+                continue
+            by_category_week[t.transaction_type][weeks_ago] += float(t.amount)
 
         insights = []
-        for category, spent in by_category.items():
-            baseline = profile.get_amount_baseline(category)
-            avg = baseline["avg_amount"]
-            if avg > 0 and spent > avg * 1.5:
-                pct_over = round((spent / avg - 1) * 100)
-                insights.append(f"You've spent NGN{spent:,.0f} on {category} this week -- {pct_over}% above your usual.")
+        for category, week_totals in by_category_week.items():
+            this_week_total = week_totals.get(0, 0.0)
+            past_weeks = [total for week, total in week_totals.items() if week >= 1]
+
+            # Cold-start guard: need real history to compare against, same
+            # principle as Layer 1's is_cold_start dampener — don't flag a
+            # "deviation" against a baseline that barely exists yet.
+            if len(past_weeks) < 2 or this_week_total == 0:
+                continue
+
+            avg_weekly_total = sum(past_weeks) / len(past_weeks)
+            if avg_weekly_total > 0 and this_week_total > avg_weekly_total * 1.5:
+                pct_over = round((this_week_total / avg_weekly_total - 1) * 100)
+                insights.append(
+                    f"You've spent NGN{this_week_total:,.0f} on {category} this week "
+                    f"-- {pct_over}% above your usual weekly amount."
+                )
 
         return {"customer_id": customer_id, "insights": insights}

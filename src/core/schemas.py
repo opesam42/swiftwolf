@@ -82,3 +82,16 @@ class SettleRequest(BaseModel):
 class SettleResponse(BaseModel):
     transaction_reference: str
     status: Literal["accepted", "already_processed"]
+
+
+class FrictionProfileResponse(BaseModel):
+    customer_id: str
+    # None means "no risk_events history yet" — deliberately distinct from 0.0
+    # (which would falsely claim a 0% proceed rate for a never-observed customer).
+    recent_proceed_rate: Optional[float] = None
+    is_low_friction_customer: bool
+
+
+class SpendingDeltaResponse(BaseModel):
+    customer_id: str
+    insights: list[str] = Field(default_factory=list)

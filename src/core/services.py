@@ -9,6 +9,8 @@ call sites.
 """
 import hashlib
 import json
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
 from sqlmodel import select
 
@@ -487,18 +489,12 @@ class SettleService:
         self.db.commit()
 
     def run_layer2(self, transaction_reference: str, final_status: str, verification_outcome: str) -> None:
-        """Background-task body — called with its OWN db/redis (see
-        routes._run_settle_background), never the request-scoped session.
-
-        Two independent gates on the SAME profile load:
-          - a failed step-up verification elevates risk_tier, regardless of
-            final_status (a rejected identity claim is a rejected identity
-            claim even if the transfer itself technically completed via some
-            other path)
-          - River/anomaly learning only runs when final_status == "completed"
-            — a failed/abandoned transfer never moved real money, so it must
-            not shape the spending baseline or train the anomaly model
-        Saved once at the end if either gate actually changed anything."""
+        """Extracts the distinct set of beneficiaries across ALL customers'
+    transaction history, plus active blacklisted accounts — the live
+    replacement for manually handing Praise a CSV. Praise's app calls this
+    (via GET /v1/internal/beneficiaries) to populate his own beneficiaries
+    table for Path A's instant-lookup demo path, instead of us re-exporting
+    a fresh CSV by hand every time seed data changes across the team."""
         from src.core.models import RiskEvent
 
         txn = self.get_transaction(transaction_reference)
@@ -568,10 +564,10 @@ class BeneficiaryExportService:
     def __init__(self, db_session):
         self.db = db_session
 
-    def get_distinct_beneficiaries(self, customer_id: str | None = None) -> list[dict]:
-        from src.core.models import Transaction
+    def get_distinct_beneficiaries(self) -> list[dict]:
+        from src.core.models import Transaction, BlacklistedAccount
 
-        query = (
+        txn_query = (
             select(
                 Transaction.beneficiary_account,
                 Transaction.beneficiary_bank_code,
@@ -580,22 +576,129 @@ class BeneficiaryExportService:
             .distinct()
             .where(
                 # Excludes the telco-aggregator sentinel rows from the
-                # airtime/data extraction fix — there's nothing meaningful for
-                # Praise's beneficiaries table to cache for those; they were
-                # never a real NUBAN beneficiary in the first place.
+                # airtime/data extraction fix — nothing meaningful for Praise's
+                # beneficiaries table to cache for those; never a real NUBAN
+                # beneficiary in the first place.
                 Transaction.beneficiary_account.is_not(None),
             )
         )
+        
+        txn_rows = self.db.exec(txn_query).all()
 
-        if customer_id:
-            query = query.where(Transaction.customer_id == customer_id)
+        # Blacklisted accounts are NOT customer-specific — deliberately not
+        # filtered by customer_id, unlike the transaction query above.
+        blacklist_query = (
+            select(
+                BlacklistedAccount.beneficiary_account,
+                BlacklistedAccount.beneficiary_bank_code,
+                BlacklistedAccount.beneficiary_name,
+            )
+            .distinct()
+            .where(
+                BlacklistedAccount.is_active == True,  # noqa: E712
+                BlacklistedAccount.beneficiary_name.is_not(None),
+            )
+        )
+        blacklist_rows = self.db.exec(blacklist_query).all()
 
-        rows = self.db.exec(query).all()
-        return [
-            {
-                "beneficiary_account": r[0],
-                "beneficiary_bank_code": r[1],
-                "beneficiary_name": r[2],
+        # Merge, keyed by composite (account, bank_code) — blacklist entries
+        # deliberately take precedence over a same-account transaction entry,
+        # since "this account is now flagged" is the more important fact if
+        # both happen to exist for the same account.
+        combined: dict[tuple[str, str], dict] = {}
+        for account, bank_code, name in txn_rows:
+            combined[(account, bank_code)] = {
+                "beneficiary_account": account,
+                "beneficiary_bank_code": bank_code,
+                "beneficiary_name": name,
+                "is_blacklisted": False,
             }
-            for r in rows
-        ]
+        for account, bank_code, name in blacklist_rows:
+            combined[(account, bank_code)] = {
+                "beneficiary_account": account,
+                "beneficiary_bank_code": bank_code,
+                "beneficiary_name": name,
+                "is_blacklisted": True,
+            }
+
+        return list(combined.values())
+
+class InsightsService:
+    """Layer 3 personalization — Tier 1 (Adaptive UX Friction) and Tier 2
+    (Deviation Tracking), per the Layer 3 Implementation doc. Both reuse
+    existing Layer 1/2 infrastructure (risk_events history, CustomerProfile's
+    category baselines) rather than introducing new scoring logic — the same
+    engine that flags fraud, inverted here to characterize what's normal.
+    """
+
+    def __init__(self, db_session):
+        self.db = db_session
+
+    def get_friction_profile(self, customer_id: str) -> dict:
+        """Aggregates a customer's last 20 risk_events to characterize how
+        much friction they typically encounter — informs the bank app's UI
+        treatment (e.g. skip an extra confirmation tap on a clean PROCEED),
+        never a live scoring decision itself."""
+        from src.core.models import RiskEvent
+
+        recent_events = self.db.exec(
+            select(RiskEvent)
+            .where(RiskEvent.customer_id == customer_id)
+            .order_by(RiskEvent.created_at.desc())
+            .limit(20)
+        ).all()
+
+        if not recent_events:
+            # None, not 0 — 0 would falsely claim "this customer proceeds 0%
+            # of the time" about someone never observed. None correctly means
+            # "unknown yet," same fairness principle as Layer 1's cold-start
+            # dampener.
+            return {
+                "customer_id": customer_id,
+                "recent_proceed_rate": None,
+                "is_low_friction_customer": False,
+            }
+
+        proceed_count = sum(1 for event in recent_events if event.decision == "PROCEED")
+        proceed_rate = proceed_count / len(recent_events)
+
+        return {
+            "customer_id": customer_id,
+            "recent_proceed_rate": round(proceed_rate, 2),
+            "is_low_friction_customer": proceed_rate > 0.9,
+        }
+
+    def get_spending_delta(self, customer_id: str) -> dict:
+        """Compares this week's actual spend in each category against the
+        customer's own baseline average — reuses
+        CustomerProfile.get_amount_baseline() directly rather than any new
+        statistical logic. Named limitation: avg_amount reflects all-time
+        history, not a rolling window, so a customer whose habits genuinely
+        shifted will show a false "deviation" until enough new data dilutes
+        the old average."""
+        from src.core.models import Transaction
+
+        profile = CustomerProfileService(self.db).get_or_create(customer_id)
+
+        week_ago = datetime.now(timezone.utc) - timedelta(days=7)
+        recent = self.db.exec(
+            select(Transaction).where(
+                Transaction.customer_id == customer_id,
+                Transaction.direction == "debit",
+                Transaction.occurred_at >= week_ago,
+            )
+        ).all()
+
+        by_category: dict[str, float] = defaultdict(float)
+        for t in recent:
+            by_category[t.transaction_type] += float(t.amount)
+
+        insights = []
+        for category, spent in by_category.items():
+            baseline = profile.get_amount_baseline(category)
+            avg = baseline["avg_amount"]
+            if avg > 0 and spent > avg * 1.5:
+                pct_over = round((spent / avg - 1) * 100)
+                insights.append(f"You've spent NGN{spent:,.0f} on {category} this week -- {pct_over}% above your usual.")
+
+        return {"customer_id": customer_id, "insights": insights}

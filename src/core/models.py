@@ -169,7 +169,6 @@ class AnomalyModelState(SQLModel, table=True):
 
 
 class BlacklistedAccount(SQLModel, table=True):
-    # TODO - might need to add account name to the fields so Praise can use that for his account lookup table
     __tablename__ = "blacklisted_accounts"
     __table_args__ = (
         # Partial unique index, not a plain unique constraint — the same
@@ -191,6 +190,12 @@ class BlacklistedAccount(SQLModel, table=True):
     reason: str = Field(
         max_length=50,
         sa_column_kwargs={"comment": "'confirmed_fraud', 'nibss_watchlist', or 'manual_flag'."},
+    )
+    beneficiary_name: Optional[str] = Field(
+        default=None, max_length=100,
+        sa_column_kwargs={"comment": "Resolved account holder name, when known — lets "
+                                       "BeneficiaryExportService surface a real name for a "
+                                       "blacklisted account too, not just legitimate ones."},
     )
     source: str = Field(
         max_length=50,

@@ -69,3 +69,4 @@ docs/internal/
 jobs/files/
 *.db
 *.sql
+*.dump

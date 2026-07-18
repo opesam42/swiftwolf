@@ -1,8 +1,15 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 
 from src.core.auth import verify_api_key
-from src.core.schemas import ScoreRequest, ScoreResponse, SettleRequest, SettleResponse
-from src.core.services import BeneficiaryExportService, ScoreService, SettleService
+from src.core.schemas import (
+    FrictionProfileResponse,
+    ScoreRequest,
+    ScoreResponse,
+    SettleRequest,
+    SettleResponse,
+    SpendingDeltaResponse,
+)
+from src.core.services import BeneficiaryExportService, InsightsService, ScoreService, SettleService
 from src.database import SessionDep
 from src.redis import RedisDep
 
@@ -80,7 +87,7 @@ async def settle_transaction_endpoint(request: SettleRequest, background_tasks: 
 
 
 @router.get("/internal/beneficiaries")
-async def export_beneficiaries(db: SessionDep, customer_id: str | None = Query(default=None)):
+async def export_beneficiaries(db: SessionDep):
     """Live replacement for manually handing Praise a CSV: he hits this (same
     X-SwiftWolf-Key auth as every other endpoint on this router) to get the
     current distinct beneficiary set — straight from real Transaction rows,
@@ -92,7 +99,28 @@ async def export_beneficiaries(db: SessionDep, customer_id: str | None = Query(d
     (bulk export vs. per-transaction scoring are different access shapes in
     principle), not an oversight."""
     service = BeneficiaryExportService(db)
-    beneficiaries = service.get_distinct_beneficiaries(customer_id)
+    beneficiaries = service.get_distinct_beneficiaries()
     return {"beneficiaries": beneficiaries, "count": len(beneficiaries)}
+
+
+@router.get("/insights/friction-profile/{customer_id}", response_model=FrictionProfileResponse)
+async def get_friction_profile(customer_id: str, db: SessionDep):
+    """Layer 3, Tier 1 — Adaptive UX Friction. Aggregates a customer's last 20
+    risk_events to characterize how much friction they typically encounter.
+    The bank app uses this for UI treatment (e.g. skip an extra confirmation
+    tap on a clean PROCEED for a low-friction customer) — never a live scoring
+    decision, that's still entirely /v1/score's job."""
+    result = InsightsService(db).get_friction_profile(customer_id)
+    return FrictionProfileResponse(**result)
+
+
+@router.get("/insights/spending-delta/{customer_id}", response_model=SpendingDeltaResponse)
+async def get_spending_delta(customer_id: str, db: SessionDep):
+    """Layer 3, Tier 2 — Deviation Tracking. Compares this week's actual spend
+    per category against the customer's own category baseline average, reusing
+    CustomerProfile.get_amount_baseline() directly rather than any new
+    statistical logic."""
+    result = InsightsService(db).get_spending_delta(customer_id)
+    return SpendingDeltaResponse(**result)
 
 

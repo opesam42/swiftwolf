@@ -114,4 +114,4 @@ if __name__ == "__main__":
         seed_blacklist(db, blacklist_service)
 
 # to run the script
-# python jobs/seed_blacklisted_accounts.py
+# python jobs/seed_blacklisted_accounts_01.py

@@ -198,11 +198,13 @@ if __name__ == "__main__":
     from src.database import engine, create_db_and_tables  # reuse the app's own engine, don't build a second one
 
     from sqlmodel import Session
+    from src.redis import get_redis_client
 
     create_db_and_tables()
 
     with Session(engine) as db:
-        profile_service = CustomerProfileService(db)  # no redis_client — seeding doesn't need the hot-path cache
+        redis_client = get_redis_client()
+        profile_service = CustomerProfileService(db, redis_client)  # no redis_client — seeding doesn't need the hot-path cache
         anomaly_service = AnomalyDetectorService(db)
         transaction_service = TransactionService(db)
         seed_profile(sys.argv[1], profile_service, anomaly_service, transaction_service)

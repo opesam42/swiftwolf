@@ -49,6 +49,7 @@ def seed_profile(
     anomaly_service: AnomalyDetectorService,
     transaction_service: TransactionService,
     calibration_percentile: float = 95,
+    customer_id_override: str | None = None,
 ) -> None:
     rows = load_rows(csv_path)
     if not rows:
@@ -61,7 +62,11 @@ def seed_profile(
         raise ValueError(
             f"Expected one customer_id in {csv_path}, found {len(customer_ids)}: {customer_ids}"
         )
-    customer_id = customer_ids.pop()
+    # customer_id_override lets the onboarding flow relabel a shared demo
+    # dataset (e.g. "cust_gbenga_demo") onto a brand-new signup's real
+    # customer_id — the CSV's own value is still validated above (guards
+    # against pointing this job at the wrong file), just not what gets used.
+    customer_id = customer_id_override or customer_ids.pop()
 
     # CRITICAL: the source statement is newest-first — sort ascending before
     # doing anything else, or recurring-gap calculations and any "what came

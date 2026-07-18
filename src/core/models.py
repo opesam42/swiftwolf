@@ -35,7 +35,7 @@ class Customer(SQLModel, table=True):
     # relationship
     transactions: list["Transaction"] = Relationship(back_populates="customer", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
     risk_events: list["RiskEvent"] = Relationship(back_populates="customer", sa_relationship_kwargs={"cascade": "all, delete-orphan"})
-
+    seed_dataset: Optional[str] = Field(default=None, max_length=50)
 
 class Transaction(SQLModel, table=True):
     __tablename__ = "transactions"

@@ -7,8 +7,10 @@ This is the ONLY place either store should be written to for profile data —
 keeping both in sync by construction, not by convention scattered across
 call sites.
 """
+import csv
 import hashlib
 import json
+import random
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -762,3 +764,90 @@ class InsightsService:
                 )
 
         return {"customer_id": customer_id, "insights": insights}
+
+
+class OnboardingService:
+    """Onboarding / demo-signup seeding: gives a brand-new customer_id a real,
+    populated transaction history instead of an empty account, so every judge
+    or tester isn't sharing one shared demo customer_id.
+
+    Dataset choice is persisted durably on Customer.seed_dataset — NOT
+    Redis+TTL — so a customer's fabricated identity never silently changes or
+    disappears after an hour. Idempotency follows the same "check the
+    Postgres row first" pattern ScoreService/SettleService already use
+    elsewhere, rather than a second, differently-shaped mechanism.
+    """
+
+    # Only "gbenga" is real today — add "praise" once his cleaned CSVs land.
+    # Paths are relative to the project root, same convention as
+    # jobs/seed_customer_profile.py's own CLI usage.
+    SEED_DATASETS: dict[str, dict[str, str]] = {
+        "gbenga": {
+            "swiftwolf_seed": "jobs/files/csv/gbenga_palmpay_stmt_swiftwolf_seed.csv",
+            "bankapp_seed": "jobs/files/csv/gbenga_palmpay_stmt_bankapp_seed.csv",
+        },
+    }
+
+    def __init__(self, db_session):
+        self.db = db_session
+
+    def start_seeding(self, customer_id: str, dataset: str | None = None) -> dict:
+        """Idempotent per customer_id: if a dataset was already persisted for
+        this customer, returns THAT choice instead of picking a new one —
+        matters for a retried call, not just tidiness, since two different
+        picks for the same customer would describe inconsistent fabricated
+        history to SwiftWolf and Praise's side."""
+        from src.core.models import Customer
+
+        customer = self.db.get(Customer, customer_id)
+        if customer is not None and customer.seed_dataset is not None:
+            return {"customer_id": customer_id, "dataset": customer.seed_dataset, "status": "already_seeded"}
+
+        if dataset is not None and dataset not in self.SEED_DATASETS:
+            raise ValueError(f"Unknown dataset {dataset!r} — must be one of {list(self.SEED_DATASETS)}")
+        chosen = dataset or random.choice(list(self.SEED_DATASETS))
+
+        if customer is None:
+            customer = Customer(
+                customer_id=customer_id,
+                profile_json=json.loads(CustomerProfile().to_json()),
+                transaction_count=0,
+                seed_dataset=chosen,
+            )
+            self.db.add(customer)
+        else:
+            customer.seed_dataset = chosen
+            self.db.add(customer)
+        self.db.commit()
+
+        return {"customer_id": customer_id, "dataset": chosen, "status": "seeding_started"}
+
+    def get_dataset(self, customer_id: str) -> str | None:
+        """Reads the persisted choice — None means either this customer_id
+        was never seeded, or doesn't exist at all. Callers (e.g. the
+        bankapp-seed-data route) treat both cases the same: tell the caller
+        to call start_seeding() first, don't silently guess."""
+        from src.core.models import Customer
+
+        customer = self.db.get(Customer, customer_id)
+        return customer.seed_dataset if customer else None
+
+    def get_bankapp_seed_rows(self, customer_id: str) -> list[dict] | None:
+        """Reads the persisted dataset choice, loads that dataset's
+        bankapp_seed.csv, and relabels every row's customer_id to the REAL
+        one — Praise's side needs this customer_id, not whichever shared demo
+        customer_id the source CSV was originally recorded under. Returns
+        None if no dataset has been persisted for this customer_id yet (the
+        route turns that into a 404, not a silently-empty/random result)."""
+        dataset = self.get_dataset(customer_id)
+        if dataset is None:
+            return None
+
+        path = self.SEED_DATASETS[dataset]["bankapp_seed"]
+        rows = []
+        with open(path) as f:
+            for row in csv.DictReader(f):
+                row = dict(row)
+                row["customer_id"] = customer_id
+                rows.append(row)
+        return rows

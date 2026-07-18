@@ -95,3 +95,16 @@ class FrictionProfileResponse(BaseModel):
 class SpendingDeltaResponse(BaseModel):
     customer_id: str
     insights: list[str] = Field(default_factory=list)
+
+
+class SeedRequest(BaseModel):
+    # Optional — omit to let OnboardingService pick randomly. Only meaningful
+    # on the FIRST call for a given customer_id; once a dataset is persisted
+    # (Customer.seed_dataset), every later call is idempotent and ignores this.
+    dataset: Optional[str] = None
+
+
+class SeedResponse(BaseModel):
+    customer_id: str
+    dataset: str
+    status: Literal["seeding_started", "already_seeded"]

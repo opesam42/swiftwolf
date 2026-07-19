@@ -31,7 +31,6 @@ from pathlib import Path
 # sys.path by default, not the project root the src.* imports below need.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.core.anonymize import anonymize_name
 from src.core.models import Transaction
 from src.core.services import AnomalyDetectorService, CustomerProfileService, TransactionService
 
@@ -91,13 +90,11 @@ def seed_profile(
             malformed += 1
             continue
 
-        # Anonymized here, at the earliest point beneficiary_name is read from
-        # the CSV — deterministic from (account, bank_code), so this SAME
-        # fabricated name is what both the Transaction row below AND the
-        # bankapp-seed-data path (OnboardingService.get_bankapp_seed_rows)
-        # independently arrive at for this beneficiary. Whatever real name the
-        # original statement extraction put in the CSV never reaches here.
-        beneficiary_name = anonymize_name(row["beneficiary_account"], row["beneficiary_bank_code"])
+        # beneficiary_name comes straight from the CSV — anonymization now
+        # happens once, at rest, via jobs/anonymize_seed_csvs.py, not on every
+        # read. The CSV itself is the already-clean artifact; no real name
+        # ever reaches this script in the first place.
+        beneficiary_name = row.get("beneficiary_name")
 
         # Persist the raw row regardless of whether it's trained on below —
         # this is the audit trail of what the statement actually contained,

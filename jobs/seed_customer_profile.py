@@ -31,6 +31,7 @@ from pathlib import Path
 # sys.path by default, not the project root the src.* imports below need.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from src.core.anonymize import anonymize_name
 from src.core.models import Transaction
 from src.core.services import AnomalyDetectorService, CustomerProfileService, TransactionService
 
@@ -90,6 +91,14 @@ def seed_profile(
             malformed += 1
             continue
 
+        # Anonymized here, at the earliest point beneficiary_name is read from
+        # the CSV — deterministic from (account, bank_code), so this SAME
+        # fabricated name is what both the Transaction row below AND the
+        # bankapp-seed-data path (OnboardingService.get_bankapp_seed_rows)
+        # independently arrive at for this beneficiary. Whatever real name the
+        # original statement extraction put in the CSV never reaches here.
+        beneficiary_name = anonymize_name(row["beneficiary_account"], row["beneficiary_bank_code"])
+
         # Persist the raw row regardless of whether it's trained on below —
         # this is the audit trail of what the statement actually contained,
         # not just what the models happened to learn from. medium is a
@@ -103,9 +112,7 @@ def seed_profile(
             amount=amount,
             beneficiary_account=row["beneficiary_account"],
             beneficiary_bank_code=row["beneficiary_bank_code"],
-            # .get(), not [] — older seed CSVs generated before this column
-            # existed shouldn't crash the whole job on a missing key.
-            beneficiary_name=row.get("beneficiary_name"),
+            beneficiary_name=beneficiary_name,
             transaction_type=row["transaction_type"],
             medium=TransactionService.MEDIUM_HISTORICAL_SEED,
             occurred_at=timestamp,
@@ -123,7 +130,7 @@ def seed_profile(
             "timestamp": timestamp,
             "beneficiary_account": row["beneficiary_account"],
             "beneficiary_bank_code": row["beneficiary_bank_code"],
-            "beneficiary_name": row.get("beneficiary_name"),
+            "beneficiary_name": beneficiary_name,
         })
 
     # Bulk pattern for BOTH stateful models: ONE Postgres read each, loop

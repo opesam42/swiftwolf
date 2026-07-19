@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Geolocation(BaseModel):
@@ -16,6 +16,16 @@ class SessionData(BaseModel):
 
 
 class ScoreRequest(BaseModel):
+    # FIX: without this, a value like "100004 " (accidental trailing
+    # whitespace from copy-paste or a form field) is treated as a DIFFERENT
+    # bank code from "100004" — silently breaks known_bank_codes/blacklist
+    # composite-key matching and produces wrong scoring with no error raised
+    # anywhere. str_strip_whitespace strips every string field on this model
+    # (transaction_reference, customer_id, beneficiary_account,
+    # beneficiary_bank_code, beneficiary_name) before validation runs, so the
+    # API never even sees the untrimmed value in the first place.
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     transaction_reference: str
     customer_id: str
     new_beneficiary: bool
@@ -63,6 +73,13 @@ class ScoreResponse(BaseModel):
 
 
 class SettleRequest(BaseModel):
+    # Same whitespace-stripping fix as ScoreRequest — this model shares
+    # transaction_reference/customer_id/beneficiary_account, so the same
+    # silent-mismatch bug applies here too (e.g. a stray-whitespace
+    # transaction_reference would fail the idempotency lookup against
+    # /v1/score's stored value).
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     transaction_reference: str
     customer_id: str
     final_status: Literal["completed", "failed", "abandoned"]

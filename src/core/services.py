@@ -845,7 +845,16 @@ class OnboardingService:
         one — Praise's side needs this customer_id, not whichever shared demo
         customer_id the source CSV was originally recorded under. Returns
         None if no dataset has been persisted for this customer_id yet (the
-        route turns that into a 404, not a silently-empty/random result)."""
+        route turns that into a 404, not a silently-empty/random result).
+
+        beneficiary_name is also replaced here with anonymize_name()'s output
+        — the SAME function, same hash logic, jobs/seed_customer_profile.py
+        uses for the SwiftWolf-side seed, so a given beneficiary can never
+        get two different fabricated names on the two sides. Whatever real
+        name the original statement extraction put in this CSV never reaches
+        Praise's side."""
+        from src.core.anonymize import anonymize_name
+
         dataset = self.get_dataset(customer_id)
         if dataset is None:
             return None
@@ -856,5 +865,6 @@ class OnboardingService:
             for row in csv.DictReader(f):
                 row = dict(row)
                 row["customer_id"] = customer_id
+                row["beneficiary_name"] = anonymize_name(row["beneficiary_account"], row["beneficiary_bank_code"])
                 rows.append(row)
         return rows

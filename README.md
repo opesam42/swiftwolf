@@ -17,7 +17,6 @@ SwiftWolf never touches money, never talks to the customer, and never sees biome
 - [Installation & Setup](#-installation--setup)
 - [API Reference](#-api-reference)
 - [Known Limitations](#-known-limitations--scoped-out)
-- [License](#-license)
 
 ---
 
@@ -38,7 +37,7 @@ Bank App                                    SwiftWolf
 ────────                                    ─────────
                     POST /v1/score
    ──────────────────────────────────────▶  Reflex Layer
-                                             (sync, <50ms, pure rules)
+                                             (sync, <500ms, pure rules)
    ◀──────────────────────────────────────  { score, decision, reasons }
 
    (transfer proceeds / step-up happens)
@@ -56,7 +55,7 @@ Bank App                                    SwiftWolf
 
 ### The Reflex Layer — real-time rule engine
 
-**Job:** answer "does this look like this customer?" in under 50ms, with zero ML inference and zero database calls on the hot path.
+**Job:** answer "does this look like this customer?" in under 500ms, with zero ML inference and zero database calls on the hot path.
 
 It's pure, deterministic arithmetic against a Redis-cached behavioral baseline — additive point scoring across a fixed set of signals:
 
@@ -243,8 +242,4 @@ Stated explicitly rather than silently omitted:
 - **No champion/challenger model rebasing.** A full fraud-relearning pipeline (a clean model that never learns from confirmed fraud, periodically reconciled with the live model) was considered and scoped out in favor of the simpler risk-tier mechanism above.
 - **A bloom filter pre-check for blacklist lookups** would matter at real bank scale (millions of accounts, every transaction checked); at current scale, a direct lookup already comfortably fits the latency budget.
 
----
 
-## 📄 License
-
-[Add your license here]

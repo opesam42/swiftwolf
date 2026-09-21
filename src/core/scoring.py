@@ -22,7 +22,7 @@ def _nearest_known_distance_km(lat: float, lng: float, known_cells: list[tuple[f
         return None
     return min(_haversine_km(lat, lng, cell[0], cell[1]) for cell in known_cells)
 
-
+# WOULD NEED AN INTERFACE OR CONTRACT TO HANDLE THE DIFFERENCE BETWEEN AIRTME, DATA, MONEY TRANSFER AND OTHER CATEGORIES
 def score_transaction(transaction: dict[str, Any], baseline: dict[str, Any], blacklisted_accounts: set[str]) -> dict[str, Any]:
     """Pure arithmetic against a cached baseline — no DB calls, no ML inference."""
     beneficiary_key = f"{transaction['beneficiary_account']}:{transaction['beneficiary_bank_code']}"

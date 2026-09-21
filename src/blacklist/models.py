@@ -2,10 +2,7 @@
 class BlacklistedAccount(SQLModel, table=True):
     __tablename__ = "blacklisted_accounts"
     __table_args__ = (
-        # Partial unique index, not a plain unique constraint — the same
-        # (account, bank_code) pair can be blacklisted, deactivated, and later
-        # blacklisted again without violating uniqueness, since only ACTIVE
-        # rows are constrained. Deactivated rows stay around as audit history.
+        # create a partial unique index on the beneficiary_account and beneficiary_bank_code columns
         Index(
             "idx_blacklist_active_composite",
             "beneficiary_account",

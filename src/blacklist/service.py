@@ -2,6 +2,20 @@ from sqlmodel import select
 from src.blacklist.models import BlacklistedAccount
 
 class BlacklistService:
+    """ Bridge between blacklisted_accounts (Postgres) and Redis hot-path cache. 
+    
+    Redis Cache Specification: 
+    - REDIS_KEY ("blacklist:active_accounts"): 
+        - Type: Redis Set 
+        - Format: Set of UTF-8 strings formatted as "{account}:{bank_code}" 
+        - Source of Truth: Postgres blacklisted_accounts table (is_active = True) 
+        - TTL: Indefinite (invalidated/rebuilt on mutation via sync_to_redis) 
+        
+    - MARKER_KEY ("blacklist:last_synced"): 
+        - Type: Redis String ("1") 
+        - Purpose: Cache Penetration marker. 
+            - Differentiates between an empty blacklist vs. an uninitialized/flushed cache. """
+
     REDIS_KEY = "blacklist:active_accounts"
     MARKER_KEY = "blacklist:last_synced" # Signals that a sync occurred
 

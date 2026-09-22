@@ -3,15 +3,17 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal, Optional
 from datetime import datetime
 
+
+class Geolocation(BaseModel):
+    lat: float
+    lng: float
+
+class SessionData(BaseModel):
+    login_to_transfer_seconds: float
+    active_call_detected: bool
+    pasted_beneficiary: bool
+
 class ScoreRequest(BaseModel):
-    # FIX: without this, a value like "100004 " (accidental trailing
-    # whitespace from copy-paste or a form field) is treated as a DIFFERENT
-    # bank code from "100004" — silently breaks known_bank_codes/blacklist
-    # composite-key matching and produces wrong scoring with no error raised
-    # anywhere. str_strip_whitespace strips every string field on this model
-    # (transaction_reference, customer_id, beneficiary_account,
-    # beneficiary_bank_code, beneficiary_name) before validation runs, so the
-    # API never even sees the untrimmed value in the first place.
     model_config = ConfigDict(str_strip_whitespace=True)
 
     transaction_reference: str
@@ -22,7 +24,7 @@ class ScoreRequest(BaseModel):
     beneficiary_name: Optional[str] = None  # from Praise's account-lookup result; may be absent/unresolved
     amount: float
     timestamp: datetime
-    last_transaction_timestamp: Optional[datetime] # that catches dormant account
+    last_transaction_timestamp: Optional[datetime] = None  # that catches dormant account
     transaction_type: Literal[
         "transfer",
         "betting",
@@ -65,8 +67,3 @@ class SessionData(BaseModel):
     login_to_transfer_seconds: float
     active_call_detected: bool
     pasted_beneficiary: bool
-
-
-class Geolocation(BaseModel):
-    lat: float
-    lng: float

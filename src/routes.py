@@ -21,8 +21,8 @@ from src.core.services import (
     SettleService,
     TransactionService,
 )
-from src.database import SessionDep
-from src.redis import RedisDep
+from src.core.database import SessionDep
+from src.core.redis import RedisDep
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(verify_api_key)])
 
@@ -35,8 +35,8 @@ def _run_settle_background(transaction_reference: str, final_status: str, verifi
     and matches the same "own session" pattern the seed jobs already use."""
     from sqlmodel import Session
 
-    from src.database import engine
-    from src.redis import get_redis_client
+    from src.core.database import engine
+    from src.core.redis import get_redis_client
 
     with Session(engine) as db:
         SettleService(db, get_redis_client()).run_layer2(transaction_reference, final_status, verification_outcome)
@@ -53,7 +53,7 @@ def _run_onboarding_seeding_background(customer_id: str, dataset: str) -> None:
     from sqlmodel import Session
 
     from jobs.seed_customer_profile import seed_profile
-    from src.database import engine
+    from src.core.database import engine
 
     swiftwolf_seed_path = OnboardingService.SEED_DATASETS[dataset]["swiftwolf_seed"]
     with Session(engine) as db:

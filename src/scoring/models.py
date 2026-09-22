@@ -1,15 +1,23 @@
+from sqlmodel import SQLModel, Field, Column, BigInteger, Boolean, DateTime, Numeric, JSON, Relationship
+from datetime import datetime
+from typing import Optional
+from src.profile.models import Customer
+from src.settlement.models import Transaction
+from datetime import datetime, timezone 
 
+def utcnow() -> datetime: 
+    return datetime.now(timezone.utc)
 
 class RiskEvent(SQLModel, table=True):
     __tablename__ = "risk_events"
 
-    id: Optional[int] = Field(default=None, sa_column=Column(BigInteger, primary_key=True, autoincrement=True))
+    id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
     transaction_reference: str = Field(foreign_key="transactions.transaction_reference", unique=True, max_length=64)
     customer_id: str = Field(foreign_key="customers.customer_id", max_length=64)
     score: int = Field()
     decision: str = Field(max_length=20)
     step_up_method: Optional[str] = Field(default=None, max_length=20)
-    reasons: list[str] = Field(default_factory=list, sa_column=Column(SAJSON, nullable=False))
+    reasons: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     anomaly_score: Optional[float] = Field(
         default=None,
         sa_column=Column(Numeric(10, 4), nullable=True,

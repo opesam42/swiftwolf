@@ -72,3 +72,5 @@ jobs/files/raw_stmts
 *.sql
 *.dump
 *.png
+# py-pglite test database (Node deps + generated launcher)
+.pglite/

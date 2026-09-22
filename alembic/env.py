@@ -5,7 +5,7 @@ from sqlalchemy import pool
 
 from alembic import context
 
-from src.config import settings
+from src.core.config import settings
 from src.core import models  # noqa: F401 — registers every table with SQLModel.metadata
 from sqlmodel import SQLModel
 

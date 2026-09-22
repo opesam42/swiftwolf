@@ -4,9 +4,12 @@ from fastapi import Depends
 from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
 
-from src.config import settings
+from src.core.config import settings
 
-from src.core import models  # noqa: F401
+from src.blacklist.models import BlacklistedAccount  # noqa: F401
+from src.scoring.models import RiskEvent  # noqa: F401
+from src.settlement.models import Transaction  # noqa: F401
+from src.profile.models import Customer  # noqa: F401
 
 DATABASE_URL = settings.DATABASE_URL
 
@@ -21,6 +24,8 @@ engine = build_engine(DATABASE_URL)
 
 @event.listens_for(engine, "connect")
 def set_search_path(dbapi_connection, connection_record):
+    if engine.dialect.name != "postgresql":
+        return
     cursor = dbapi_connection.cursor()
     cursor.execute("SET search_path TO public")
     cursor.close()
@@ -34,9 +39,9 @@ def db_init():
     create_db_and_tables()
 
 
-def get_session():
+def get_db_session():
     with Session(engine) as session:
         yield session
 
 
-SessionDep = Annotated[Session, Depends(get_session)]
+SessionDep = Annotated[Session, Depends(get_db_session)]

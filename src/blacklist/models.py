@@ -1,3 +1,10 @@
+from sqlmodel import SQLModel, Field, Column, Index, BigInteger, Boolean, DateTime, Text, text
+from datetime import datetime
+from typing import Optional
+from datetime import datetime, timezone 
+
+def utcnow() -> datetime: 
+    return datetime.now(timezone.utc)
 
 class BlacklistedAccount(SQLModel, table=True):
     __tablename__ = "blacklisted_accounts"
@@ -12,7 +19,7 @@ class BlacklistedAccount(SQLModel, table=True):
         ),
     )
 
-    id: Optional[int] = Field(default=None, sa_column=Column(BigInteger, primary_key=True, autoincrement=True))
+    id: Optional[int] = Field(default=None, primary_key=True, sa_type=BigInteger)
     beneficiary_account: str = Field(max_length=20)
     beneficiary_bank_code: str = Field(max_length=10)
     reason: str = Field(

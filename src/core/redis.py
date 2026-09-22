@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import Depends
 import redis
 
-from src.config import settings
+from src.core.config import settings
 
 
 @lru_cache

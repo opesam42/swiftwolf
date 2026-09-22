@@ -6,7 +6,7 @@ deliberate hackathon scope tradeoff, not an oversight.
 from fastapi import HTTPException, Security, status
 from fastapi.security import APIKeyHeader
 
-from src.config import settings
+from src.core.config import settings
 
 API_KEY_NAME = "X-SwiftWolf-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)

@@ -4,6 +4,7 @@ from sqlmodel import Session
 
 from src.blacklist.models import BlacklistedAccount
 from src.blacklist.services import BlacklistService
+from src.scoring.services import RuleEngine
 
 
 def test_score_clean_transaction_proceeds(client, auth_headers):
@@ -88,3 +89,37 @@ def test_score_idempotency(client, auth_headers):
     res2 = client.post("/v1/score", json=payload, headers=auth_headers)
     assert res2.status_code == 200
     assert res1.json() == res2.json()
+
+
+def test_continuous_amount_scoring_thresholds():
+    """
+    Verifies that the Sigmoid Transfer Function scales risk points smoothly
+    across Z-score thresholds and caps at max_score (50 pts).
+    """
+    engine = RuleEngine(
+        amount_score_max_score=50.0,
+        amount_score_steepness=1.5,
+        amount_score_midpoint=3.0,
+    )
+
+    # 1. Normal variation (Z <= 1.0) -> 0 pts
+    assert engine._calculate_continuous_score(z_score=0.5) == 0
+    assert engine._calculate_continuous_score(z_score=1.0) == 0
+
+    # 2. Slight stretch (Z = 2.0) -> ~10 pts
+    score_z2 = engine._calculate_continuous_score(z_score=2.0)
+    assert 8 <= score_z2 <= 12  # Approximately 10 pts
+
+    # 3. Midpoint inflection (Z = 3.0) -> Exactly 25 pts (50% of max 50)
+    assert engine._calculate_continuous_score(z_score=3.0) == 25
+
+    # 4. High anomaly (Z = 4.0) -> ~42 pts
+    score_z4 = engine._calculate_continuous_score(z_score=4.0)
+    assert 40 <= score_z4 <= 44
+
+    # 5. Extreme anomaly ceiling (Z >= 6.0) -> Capped at 50 pts
+    assert engine._calculate_continuous_score(z_score=6.0) >= 49
+    assert engine._calculate_continuous_score(z_score=15.0) == 50
+
+
+    from datetime import datetime, timezone

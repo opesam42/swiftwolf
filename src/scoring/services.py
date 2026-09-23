@@ -1,8 +1,9 @@
 from datetime import datetime
-from math import atan2, cos, radians, sin, sqrt
+from math import atan2, cos, radians, sin, sqrt, exp
 from typing import Any
 from sqlmodel import Session, select
 from sqlalchemy.exc import IntegrityError
+from src.core.config import settings
 
 from src.scoring.models import RiskEvent
 from src.settlement.models import Transaction
@@ -12,8 +13,17 @@ from src.profile.services import CustomerProfileService
 class RuleEngine:
     """Deep module encapsulating Layer 1 rule evaluation heuristics."""
 
-    def __init__(self, blacklisted_accounts: set[str] | None = None):
+    def __init__(
+        self, 
+        blacklisted_accounts: set[str] | None = None,
+        amount_score_max_score: int = 50,
+        amount_score_steepness: float = 1.5,
+        amount_score_midpoint: float = 3.0
+    ):
         self.blacklisted_accounts = blacklisted_accounts or set()
+        self.amount_score_max_score = amount_score_max_score
+        self.amount_score_steepness = amount_score_steepness
+        self.amount_score_midpoint = amount_score_midpoint
 
     def evaluate(self, transaction: dict[str, Any], baseline: dict[str, Any] | None = None) -> dict[str, Any]:
         if baseline is None:
@@ -49,11 +59,14 @@ class RuleEngine:
             score += 15
             reasons.append("new_bank")
 
+        # SCORE FOR AMOUNT DEVIATION
         cat_baseline = baseline.get("category_baselines", {}).get(transaction["transaction_type"])
         if cat_baseline and cat_baseline.get("std_amount", 0) > 0:
-            deviation = abs(transaction["amount"] - cat_baseline["avg_amount"])
-            if deviation > 2 * cat_baseline["std_amount"]:
-                score += 25
+            # Z_SCORE = | amount - mean | / std_amount
+            z_score = abs(transaction["amount"] - cat_baseline["avg_amount"]) / cat_baseline["std_amount"]
+            amount_score = self._calculate_continuous_score(z_score)
+            if amount_score > 0:
+                score += amount_score
                 reasons.append("amount_deviation")
 
         hour = transaction["timestamp"].hour
@@ -114,6 +127,30 @@ class RuleEngine:
             "reasons": reasons,
         }
 
+    def _calculate_continuous_score(self, z_score: float) -> int:
+        """ Calculates risk points for unusual transaction amounts using a Sigmoid curve. 
+        WHY WE USE THIS (Rationale):
+        
+        Legacy rules used binary thresholds (e.g., "if amount > 2 std_dev, add 25 pts"). 
+        This created a "score cliff": a minor 2.01x deviation received the exact same risk penalty as an extreme 15x account-draining transaction. 
+        
+        The Sigmoid function smoothly ramps up risk points as the deviation grows:
+            - Small deviations (<= 1.0x) = 0 pts (normal behavior)
+            - Mild deviations (2.0x) ~= 10 pts (low friction) 
+            - Moderate (3.0x midpoint) ~= 25 pts (half max risk) 
+            - Extreme (>= 6.0x) = 50 pts (capped maximum) 
+        PARAMETERS:
+            z_score : float How many standard deviations the amount is from the customer's average.
+        """
+
+        if z_score <= 1.0:
+            return 0 # completely normal transaction
+        
+        # using sigmoid function
+        risk_factor = 1.0 / (1.0 + exp(-self.amount_score_steepness * (z_score - self.amount_score_midpoint)))
+        score = self.amount_score_max_score * risk_factor
+        return int( round(score, 0) )
+
     @staticmethod
     def _decide(score: int) -> str:
         if score <= 30:
@@ -148,13 +185,17 @@ class RuleEngine:
         return min(self._haversine_km(lat, lng, cell, cell[2]) for cell in known_cells)
 
 class ScoreService:
-    """Orchestrates synchronous <50ms scoring end-to-end."""
+    """Orchestrates synchronous scoring end-to-end."""
 
     def __init__(self, db_session: Session, redis_client=None):
         self.db = db_session
         self.profile_service = CustomerProfileService(db_session, redis_client)
         self.blacklist_service = BlacklistService(db_session, redis_client)
-        self.rule_engine = RuleEngine()
+        self.rule_engine = RuleEngine(
+            amount_score_max_score=settings.AMOUNT_SCORE_MAX_SCORE,
+            amount_score_steepness=settings.AMOUNT_SCORE_STEEPNESS,
+            amount_score_midpoint=settings.AMOUNT_SCORE_MIDPOINT,
+        )
 
     def get_cached_decision(self, transaction_reference: str) -> dict | None:
         existing = self.db.exec(

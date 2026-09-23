@@ -1,5 +1,6 @@
 import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(CURRENT_DIR)
@@ -10,6 +11,20 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     SWIFTWOLF_API_KEY: str = ""
     REDIS_URL: str = "redis://localhost:6379/1"
+
+    # AMOUNT CONTINUOUS SCORE CONFIG
+    AMOUNT_SCORE_MAX_SCORE: float = Field(
+        default=50,
+        description="Maximum risk points awarded for extreme amount deviations."
+    )
+    AMOUNT_SCORE_STEEPNESS: float = Field(
+        default=1.5,
+        description="Growth rate of the Sigmoid curve. Higher values create a steeper score ramp."
+    )
+    AMOUNT_SCORE_MIDPOINT: float = Field(
+        default=3.0,
+        description="Z-score deviation midpoint where 50% of max points are awarded."
+    )
 
     # 4. Feed the absolute path directly to Pydantic
     model_config = SettingsConfigDict(

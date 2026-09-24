@@ -26,6 +26,22 @@ class Settings(BaseSettings):
         description="Z-score deviation midpoint where 50% of max points are awarded."
     )
 
+    # --- Velocity Window Parameters ---
+    VELOCITY_WINDOW_SECONDS: int = Field(
+        default=600,
+        description="Sliding time window duration in seconds (600s = 10 minutes) for tracking transaction velocity.",
+    )
+
+    VELOCITY_MAX_THRESHOLD: int = Field(
+        default=5,
+        description= "Maximum transaction count allowed within VELOCITY_WINDOW_SECONDS before raising a burst penalty.",
+    )
+
+    VELOCITY_SCORE_PENALTY: int = Field(
+        default=50,
+        description="Risk points added when transaction count in the window exceeds VELOCITY_MAX_THRESHOLD.",
+    )
+
     # 4. Feed the absolute path directly to Pydantic
     model_config = SettingsConfigDict(
         env_file=ENV_FILE_PATH, 

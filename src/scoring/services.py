@@ -1,14 +1,116 @@
+import time
 from datetime import datetime
 from math import atan2, cos, radians, sin, sqrt, exp
 from typing import Any
+from dataclasses import dataclass
 from sqlmodel import Session, select
 from sqlalchemy.exc import IntegrityError
+from redis.exceptions import RedisError
 from src.core.config import settings
+from src.core.redis import RedisDep
 
 from src.scoring.models import RiskEvent
 from src.settlement.models import Transaction
 from src.blacklist.services import BlacklistService
 from src.profile.services import CustomerProfileService
+
+
+
+@dataclass(slots=True, frozen=True)
+class VelocityResult:
+    tx_count: int
+    is_velocity_anomaly: bool
+    velocity_risk_points: int
+
+class VelocityWindow:
+    """ 
+    Manages atomic sliding-window velocity counters in Redis ZSET. 
+    This class tracks transaction frequency over a short sliding time window to detect rapid-fire account takeover (ATO) or money-mule drains. 
+    
+    INFRASTRUCTURE & FALLBACK: 
+    --------------------------
+    Uses an atomic Redis Sorted Set pipeline (ZREMRANGEBYSCORE, ZADD, ZCARD, EXPIRE). If Redis is unavailable (redis=None), gracefully degrades by returning a baseline count of 1 with zero risk points. 
+    """
+
+    def __init__(
+        self,
+        redis: RedisDep | None,
+        window_seconds: int | None = None,
+        max_tx_threshold: int | None = None,
+        penalty_score: int | None = None,
+    ):
+        self.redis = redis
+        self.window_seconds = window_seconds or settings.VELOCITY_WINDOW_SECONDS
+        self.max_tx_threshold = max_tx_threshold or settings.VELOCITY_MAX_THRESHOLD
+        self.penalty_score = penalty_score or settings.VELOCITY_SCORE_PENALTY
+
+    def record_and_check_velocity(self, customer_id: str, tx_reference: str) -> VelocityResult :
+        """ Records a transaction timestamp and checks for burst velocity anomalies. 
+        
+        ARGS: 
+        -----
+        customer_id : str 
+            Unique customer identifier used for Redis key partitioning (velocity:{id}). 
+        tx_reference : str 
+            Unique transaction reference. Used as the ZSET value for idempotency (retried requests update timestamps rather than inflating counts). 
+        
+        RETURNS: 
+        -------- 
+        VelocityResult: 
+            - tx_count (int): 
+                Active transactions in the sliding window. 
+            - is_velocity_anomaly (bool): 
+                True if tx_count >= max_tx_threshold. 
+            - velocity_risk_points (int): 
+                50 pts if anomaly, else 0 pts. 
+        """
+
+        # Graceful fallback if Redis is down or None 
+        if self.redis is None:
+            return VelocityResult(tx_count=1, is_velocity_anomaly=False, velocity_risk_points=0)
+
+        is_anomaly = False
+        risk_points = 0
+
+        key = f"velocity:{customer_id}"
+        now = time.time()
+        cutoff = now - self.window_seconds
+
+        try:
+            # pipeline for batching for network optimization
+            pipe = self.redis.pipeline()
+
+            # remove timestamp older than window_seconds ago
+            pipe.zremrangebyscore(key, "-inf", cutoff)
+
+            # add current transaction timestamp
+            pipe.zadd(key, {tx_reference: now})
+
+            # count the remaining the transaction in the last window_seconds ago
+            pipe.zcard(key)
+
+            # set expiration
+            pipe.expire(key, self.window_seconds + 60)
+
+            results = pipe.execute()
+        except RedisError:
+            # Redis down or timed out: fail open so scoring still completes
+            return VelocityResult(tx_count=1, is_velocity_anomaly=False, velocity_risk_points=0)
+
+        # output of zcard
+        tx_count = results[2]
+
+        if tx_count >= self.max_tx_threshold:
+            risk_points = self.penalty_score
+            is_anomaly = True
+
+        return VelocityResult(
+            tx_count=tx_count,
+            is_velocity_anomaly=is_anomaly,
+            velocity_risk_points=risk_points,
+        )
+
+
 
 class RuleEngine:
     """Deep module encapsulating Layer 1 rule evaluation heuristics."""
@@ -16,16 +118,21 @@ class RuleEngine:
     def __init__(
         self, 
         blacklisted_accounts: set[str] | None = None,
-        amount_score_max_score: int = 50,
-        amount_score_steepness: float = 1.5,
-        amount_score_midpoint: float = 3.0
+        amount_score_max_score: int = settings.AMOUNT_SCORE_MAX_SCORE,
+        amount_score_steepness: float = settings.AMOUNT_SCORE_STEEPNESS,
+        amount_score_midpoint: int = settings.AMOUNT_SCORE_MIDPOINT,
     ):
         self.blacklisted_accounts = blacklisted_accounts or set()
         self.amount_score_max_score = amount_score_max_score
         self.amount_score_steepness = amount_score_steepness
         self.amount_score_midpoint = amount_score_midpoint
 
-    def evaluate(self, transaction: dict[str, Any], baseline: dict[str, Any] | None = None) -> dict[str, Any]:
+    def evaluate(
+        self, 
+        transaction: dict[str, Any], 
+        baseline: dict[str, Any] | None = None,
+        velocity_result: VelocityResult | None = None
+    ) -> dict[str, Any]:
         if baseline is None:
             baseline = {
                 "known_beneficiaries": [],
@@ -68,6 +175,11 @@ class RuleEngine:
             if amount_score > 0:
                 score += amount_score
                 reasons.append("amount_deviation")
+
+        # check for transaction velocity spike
+        if velocity_result and velocity_result.is_velocity_anomaly:
+            score += velocity_result.velocity_risk_points
+            reasons.append("high_velocity_burst") 
 
         hour = transaction["timestamp"].hour
         if baseline.get("typical_hours") and hour not in baseline["typical_hours"]:
@@ -191,11 +303,8 @@ class ScoreService:
         self.db = db_session
         self.profile_service = CustomerProfileService(db_session, redis_client)
         self.blacklist_service = BlacklistService(db_session, redis_client)
-        self.rule_engine = RuleEngine(
-            amount_score_max_score=settings.AMOUNT_SCORE_MAX_SCORE,
-            amount_score_steepness=settings.AMOUNT_SCORE_STEEPNESS,
-            amount_score_midpoint=settings.AMOUNT_SCORE_MIDPOINT,
-        )
+        self.rule_engine = RuleEngine()
+        self.velocity_window = VelocityWindow(redis=redis_client)
 
     def get_cached_decision(self, transaction_reference: str) -> dict | None:
         existing = self.db.exec(
@@ -221,9 +330,10 @@ class ScoreService:
         if baseline is None:
             profile = self.profile_service.get_or_create(transaction["customer_id"])
             baseline = profile.to_baseline_dict()
+        velocity_result = self.velocity_window.record_and_check_velocity(transaction["customer_id"], transaction["transaction_reference"])
 
         self.rule_engine.blacklisted_accounts = self.blacklist_service.get_active_keys()
-        result = self.rule_engine.evaluate(transaction, baseline)
+        result = self.rule_engine.evaluate(transaction, baseline, velocity_result)
 
         self.profile_service.ensure_customer_row(transaction["customer_id"])
 

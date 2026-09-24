@@ -58,6 +58,7 @@ class ScoreResponse(BaseModel):
             "dormant_account_spike",
             "location_deviation_major",
             "location_deviation_minor",
+            "high_velocity_burst",
         ]
     ] = Field(default_factory=list)
 

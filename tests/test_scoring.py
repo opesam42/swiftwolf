@@ -1,10 +1,15 @@
+import time
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
+import pytest
+import redis
 from sqlmodel import Session
 
 from src.blacklist.models import BlacklistedAccount
 from src.blacklist.services import BlacklistService
-from src.scoring.services import RuleEngine
+from src.core.config import settings
+from src.scoring.services import RuleEngine, VelocityWindow
 
 
 def test_score_clean_transaction_proceeds(client, auth_headers):
@@ -123,3 +128,162 @@ def test_continuous_amount_scoring_thresholds():
 
 
     from datetime import datetime, timezone
+
+
+# --- Velocity window ---
+
+WINDOW_SECONDS = 600
+MAX_TX_THRESHOLD = 5
+PENALTY_SCORE = 50
+
+
+@pytest.fixture(name="velocity")
+def velocity_fixture(fake_redis):
+    """Explicit window settings so the tests don't depend on .env values."""
+    return VelocityWindow(
+        fake_redis,
+        window_seconds=WINDOW_SECONDS,
+        max_tx_threshold=MAX_TX_THRESHOLD,
+        penalty_score=PENALTY_SCORE,
+    )
+
+
+def _seed(fake_redis, customer_id: str, refs: list[str], seconds_ago: int):
+    """Writes past transactions straight into the ZSET with backdated scores."""
+    timestamp = time.time() - seconds_ago
+    fake_redis.zadd(f"velocity:{customer_id}", {ref: timestamp for ref in refs})
+
+
+def test_velocity_cold_start(velocity, fake_redis):
+    """First transaction for a customer creates the key with a TTL and no penalty."""
+    result = velocity.record_and_check_velocity("CUST_NEW", "TXN_1")
+
+    assert result.tx_count == 1
+    assert result.is_velocity_anomaly is False
+    assert result.velocity_risk_points == 0
+    assert 0 < fake_redis.ttl("velocity:CUST_NEW") <= WINDOW_SECONDS + 60
+
+
+def test_velocity_below_threshold(velocity):
+    """Three transactions inside the window stay under the threshold of 5."""
+    for i in range(3):
+        result = velocity.record_and_check_velocity("CUST_1", f"TXN_{i}")
+
+    assert result.tx_count == 3
+    assert result.is_velocity_anomaly is False
+    assert result.velocity_risk_points == 0
+
+
+@pytest.mark.parametrize(
+    "tx_total, expected_anomaly, expected_points",
+    [(4, False, 0), (5, True, PENALTY_SCORE)],
+)
+def test_velocity_threshold_boundary(velocity, tx_total, expected_anomaly, expected_points):
+    """The anomaly fires when the count reaches the threshold, not one before."""
+    for i in range(tx_total):
+        result = velocity.record_and_check_velocity("CUST_1", f"TXN_{i}")
+
+    assert result.tx_count == tx_total
+    assert result.is_velocity_anomaly is expected_anomaly
+    assert result.velocity_risk_points == expected_points
+
+
+def test_velocity_all_expired(velocity, fake_redis):
+    """Transactions older than the window are pruned before counting."""
+    _seed(fake_redis, "CUST_1", [f"OLD_{i}" for i in range(4)], seconds_ago=900)
+
+    result = velocity.record_and_check_velocity("CUST_1", "TXN_NEW")
+
+    assert result.tx_count == 1
+    assert result.is_velocity_anomaly is False
+    assert fake_redis.zcard("velocity:CUST_1") == 1
+
+
+def test_velocity_partial_expiry(velocity, fake_redis):
+    """Only entries outside the sliding window are removed."""
+    _seed(fake_redis, "CUST_1", ["OLD_1", "OLD_2"], seconds_ago=720)
+    _seed(fake_redis, "CUST_1", ["RECENT_1", "RECENT_2"], seconds_ago=180)
+
+    result = velocity.record_and_check_velocity("CUST_1", "TXN_NEW")
+
+    assert result.tx_count == 3
+    assert fake_redis.zscore("velocity:CUST_1", "OLD_1") is None
+    assert fake_redis.zscore("velocity:CUST_1", "OLD_2") is None
+    assert fake_redis.zscore("velocity:CUST_1", "RECENT_1") is not None
+
+
+def test_velocity_retry_same_reference(velocity, fake_redis):
+    """A retried tx_reference refreshes its timestamp instead of adding a duplicate."""
+    _seed(fake_redis, "CUST_1", ["TXN_RETRY"], seconds_ago=60)
+    first_score = fake_redis.zscore("velocity:CUST_1", "TXN_RETRY")
+
+    first = velocity.record_and_check_velocity("CUST_1", "TXN_RETRY")
+    second = velocity.record_and_check_velocity("CUST_1", "TXN_RETRY")
+
+    assert first.tx_count == 1
+    assert second.tx_count == 1
+    assert fake_redis.zscore("velocity:CUST_1", "TXN_RETRY") > first_score
+
+
+def test_velocity_customer_isolation(velocity, fake_redis):
+    """One customer's burst doesn't leak into another customer's window."""
+    for i in range(10):
+        result_a = velocity.record_and_check_velocity("CUST_A", f"TXN_A_{i}")
+    result_b = velocity.record_and_check_velocity("CUST_B", "TXN_B_0")
+
+    assert result_a.tx_count == 10
+    assert result_a.is_velocity_anomaly is True
+    assert result_b.tx_count == 1
+    assert result_b.is_velocity_anomaly is False
+    assert fake_redis.zcard("velocity:CUST_B") == 1
+
+
+def _unreachable_redis():
+    client = MagicMock()
+    client.pipeline.return_value.execute.side_effect = redis.ConnectionError("down")
+    return client
+
+
+@pytest.mark.parametrize(
+    "redis_client",
+    [None, _unreachable_redis()],
+    ids=["redis_none", "redis_connection_error"],
+)
+def test_velocity_redis_unavailable(redis_client):
+    """Missing or unreachable Redis fails open with a neutral result."""
+    velocity = VelocityWindow(redis_client, window_seconds=WINDOW_SECONDS, max_tx_threshold=MAX_TX_THRESHOLD)
+
+    result = velocity.record_and_check_velocity("CUST_1", "TXN_1")
+
+    assert result.tx_count == 1
+    assert result.is_velocity_anomaly is False
+    assert result.velocity_risk_points == 0
+
+
+def test_score_endpoint_flags_velocity_burst(client, auth_headers):
+    """The Nth transaction inside the window adds the velocity penalty to the score."""
+    threshold = settings.VELOCITY_MAX_THRESHOLD
+    base_payload = {
+        "customer_id": "CUST_BURST",
+        "new_beneficiary": False,
+        "beneficiary_account": "1234567890",
+        "beneficiary_bank_code": "058",
+        "amount": 5000.0,
+        "transaction_type": "transfer",
+        "medium": "app",
+    }
+
+    responses = []
+    for i in range(threshold):
+        payload = {
+            **base_payload,
+            "transaction_reference": f"TXN_BURST_{i}",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        res = client.post("/v1/score", json=payload, headers=auth_headers)
+        assert res.status_code == 200
+        responses.append(res.json())
+
+    assert "high_velocity_burst" not in responses[-2]["reasons"]
+    assert "high_velocity_burst" in responses[-1]["reasons"]
+    assert responses[-1]["score"] - responses[-2]["score"] == settings.VELOCITY_SCORE_PENALTY

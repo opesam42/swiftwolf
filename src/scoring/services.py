@@ -134,22 +134,27 @@ class RuleEngine:
         velocity_result: VelocityResult | None = None
     ) -> dict[str, Any]:
         if baseline is None:
+            # TODO: might need to use a schema - so if anything changes at the customer profile end
             baseline = {
-                "known_beneficiaries": [],
+                "known_destinations": [],
                 "known_bank_codes": [],
                 "category_baselines": {},
                 "typical_hours": [],
                 "is_cold_start": True,
             }
 
-        beneficiary_key = f"{transaction['beneficiary_account']}:{transaction['beneficiary_bank_code']}"
-        if beneficiary_key in self.blacklisted_accounts:
-            return {
-                "score": 999,
-                "decision": "BLOCK",
-                "step_up_method": None,
-                "reasons": ["blacklisted_account"],
-            }
+        is_transfer = transaction["transaction_type"] == "transfer"
+
+        # Blacklist keys are "{account}:{bank_code}", which only identify NUBAN transfers
+        if is_transfer:
+            blacklist_key = f"{transaction['beneficiary_account']}:{transaction['beneficiary_bank_code']}"
+            if blacklist_key in self.blacklisted_accounts:
+                return {
+                    "score": 999,
+                    "decision": "BLOCK",
+                    "step_up_method": None,
+                    "reasons": ["blacklisted_account"],
+                }
 
         score = 0
         reasons: list[str] = []
@@ -158,11 +163,14 @@ class RuleEngine:
             score += 15
             reasons.append("elevated_risk_tier")
 
-        if beneficiary_key not in baseline.get("known_beneficiaries", []):
+        destination_key = CustomerProfileService.destination_key_for(transaction)
+        is_new_destination = destination_key not in baseline.get("known_destinations", [])
+
+        if is_new_destination:
             score += 30
             reasons.append("new_beneficiary")
 
-        if transaction["beneficiary_bank_code"] not in baseline.get("known_bank_codes", []):
+        if is_transfer and transaction["beneficiary_bank_code"] not in baseline.get("known_bank_codes", []):
             score += 15
             reasons.append("new_bank")
 
@@ -194,7 +202,7 @@ class RuleEngine:
             if session.get("active_call_detected"):
                 score += 50
                 reasons.append("active_call")
-            if session.get("pasted_beneficiary") and beneficiary_key not in baseline.get("known_beneficiaries", []):
+            if session.get("pasted_beneficiary") and is_new_destination:
                 score += 10
                 reasons.append("pasted_new_beneficiary")
 

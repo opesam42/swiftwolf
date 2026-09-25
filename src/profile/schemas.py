@@ -7,7 +7,7 @@ class BaselineResponse(BaseModel):
     customer_id: str
     risk_tier: str
     is_cold_start: bool
-    known_beneficiaries_count: int
+    known_destinations_count: int
     known_banks_count: int
 
 

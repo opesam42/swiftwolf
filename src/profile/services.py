@@ -16,14 +16,54 @@ class CustomerProfileService:
     def _redis_key(self, customer_id: str) -> str:
         return f"baseline:{customer_id}"
 
+    @staticmethod
+    def build_destination_key(category: str, *identifying_fields: str) -> str:
+        """
+        Builds a composite destination key from the minimum set of fields
+        that uniquely identify a recipient within a given category.
+
+        Used by both the Reflex Layer (RuleEngine, to check if a destination
+        is known) and the Vigilance Layer (SettlementService, to record a
+        newly-confirmed destination after settlement)
+        """
+        return f"{category}:{':'.join(identifying_fields)}"
+
+    @classmethod
+    def destination_key_for(cls, transaction: dict) -> str:
+        """
+        Resolves a transaction's category and builds its destination key.
+
+        `beneficiary_bank_code` carries the provider for each category
+        (bank code, network, disco, platform) and `beneficiary_account`
+        carries the recipient identifier (NUBAN, phone, meter, account ref).
+        """
+        provider = transaction["beneficiary_bank_code"]
+        recipient = transaction["beneficiary_account"]
+
+        match transaction["transaction_type"]:
+            case "transfer":
+                return cls.build_destination_key("transfer", provider, recipient)
+            case "airtime" | "data":
+                # Airtime and data top up the same phone line
+                return cls.build_destination_key("airtime", provider, recipient)
+            case "electricity_bill":
+                return cls.build_destination_key("electricity", provider, recipient)
+            case "water_bill":
+                return cls.build_destination_key("water", provider, recipient)
+            case "cable_tv":
+                return cls.build_destination_key("cable_tv", provider, recipient)
+            case "betting":
+                return cls.build_destination_key("betting", provider, recipient)
+            case other:
+                raise ValueError(f"Unknown transaction_type for destination key: {other!r}")
+
+
     def get_cached_baseline(self, customer_id: str) -> dict | None:
         """Fast <50ms read path lookup from Redis."""
         if self.redis is not None:
             raw = self.redis.get(self._redis_key(customer_id))
             if raw:
                 data = json.loads(raw if isinstance(raw, str) else raw.decode())
-                if "known_location_cells" in data:
-                    data["known_location_cells"] = [tuple(c) for c in data["known_location_cells"]]
                 return data
 
         # Fallback to Postgres on cache miss
@@ -38,8 +78,6 @@ class CustomerProfileService:
     def _cache_baseline(self, customer_id: str, baseline: dict) -> None:
         if self.redis is not None:
             serializable = dict(baseline)
-            if "known_location_cells" in serializable:
-                serializable["known_location_cells"] = [list(c) for c in serializable["known_location_cells"]]
             self.redis.set(self._redis_key(customer_id), json.dumps(serializable), ex=86400)  # 24h TTL
 
     def get_or_create(self, customer_id: str) -> Customer:
@@ -58,15 +96,17 @@ class CustomerProfileService:
         """Asynchronously updates customer statistics post-settlement and refreshes Redis."""
         customer = self.get_or_create(customer_id)
 
-        # 1. Update known beneficiaries & bank codes
-        beneficiary_key = f"{txn_data['beneficiary_account']}:{txn_data['beneficiary_bank_code']}"
-        known_bens = set(customer.known_beneficiaries or [])
-        known_bens.add(beneficiary_key)
-        customer.known_beneficiaries = list(known_bens)
+        # 1. Update known destinations & bank codes
+        destination_key = self.destination_key_for(txn_data)
+        known_destinations = set(customer.known_destinations or [])
+        known_destinations.add(destination_key)
+        customer.known_destinations = list(known_destinations)
 
-        known_banks = set(customer.known_bank_codes or [])
-        known_banks.add(txn_data["beneficiary_bank_code"])
-        customer.known_bank_codes = list(known_banks)
+        # Bank codes are only meaningful for transfers
+        if txn_data["transaction_type"] == "transfer":
+            known_banks = set(customer.known_bank_codes or [])
+            known_banks.add(txn_data["beneficiary_bank_code"])
+            customer.known_bank_codes = list(known_banks)
 
         # 2. Update typical hours
         if "settled_at" in txn_data:
@@ -86,27 +126,3 @@ class CustomerProfileService:
 
         # Evict / refresh cache
         self._cache_baseline(customer_id, customer.to_baseline_dict())
-
-
-class AnomalyDetectorService:
-    """Wrapper encapsulating River ML online population anomaly detection."""
-
-    def __init__(self, db_session: Session, redis_client=None):
-        self.db = db_session
-        self.redis = redis_client
-
-    def evaluate_anomaly(self, transaction_data: dict) -> dict:
-        """Calculates anomaly z-score for real-time scoring."""
-        amount = transaction_data.get("amount", 0.0)
-        # Simple statistical anomaly score calculation
-        anomaly_score = min(1.0, amount / 1_000_000.0)
-        return {
-            "anomaly_score": anomaly_score,
-            "anomaly_flagged": anomaly_score > 0.8,
-            "anomaly_zscore": anomaly_score * 3.0,
-        }
-
-    def learn_from_settled_transaction(self, transaction_data: dict) -> None:
-        """Trains online River ML model incrementally in background."""
-        # Incremental model weight updating logic executes here
-        pass

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from fastapi import BackgroundTasks
 from sqlmodel import Session, select
 
-from src.profile.services import AnomalyDetectorService, CustomerProfileService
+from src.profile.services import CustomerProfileService
 from src.settlement.models import Transaction
 
 
@@ -14,7 +14,6 @@ class SettleService:
         self.db = db_session
         self.redis = redis_client
         self.profile_service = CustomerProfileService(db_session, redis_client)
-        self.anomaly_service = AnomalyDetectorService(db_session, redis_client)
 
     def settle(self, payload: dict, background_tasks: BackgroundTasks) -> dict:
         txn_ref = payload["transaction_reference"]
@@ -83,8 +82,6 @@ class SettleService:
         try:
             # Update customer statistical baseline in Postgres/Redis
             self.profile_service.update_from_settled_transaction(customer_id, transaction_data)
-            # Train River ML population anomaly detector (HalfSpaceTrees)
-            self.anomaly_service.learn_from_settled_transaction(transaction_data)
         except Exception as e:
             # In production, log to error tracking (e.g., Sentry / Datadog)
             print(f"[Settlement Worker Error] Failed async ML update for {customer_id}: {e}")

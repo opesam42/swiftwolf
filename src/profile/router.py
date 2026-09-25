@@ -20,7 +20,7 @@ async def get_customer_baseline(customer_id: str, db: SessionDep, redis_client: 
         customer_id=customer_id,
         risk_tier=baseline["risk_tier"],
         is_cold_start=baseline["is_cold_start"],
-        known_beneficiaries_count=len(baseline["known_beneficiaries"]),
+        known_destinations_count=len(baseline["known_destinations"]),
         known_banks_count=len(baseline["known_bank_codes"]),
     )
 

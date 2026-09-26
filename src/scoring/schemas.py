@@ -3,6 +3,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal, Optional
 from datetime import datetime
 
+from src.settlement.models import TransactionType
+
 
 class Geolocation(BaseModel):
     lat: float
@@ -19,21 +21,14 @@ class ScoreRequest(BaseModel):
     transaction_reference: str
     customer_id: str
     new_beneficiary: bool
-    beneficiary_account: str
-    beneficiary_bank_code: str
-    beneficiary_name: Optional[str] = None  # from Praise's account-lookup result; may be absent/unresolved
-    amount: float
+    # provider: bank code for transfers, telecom network for airtime/data, DISCO for electricity, etc.
+    provider: str
+    # recipient: NUBAN account number, phone number, meter number, etc.
+    recipient: str
+    amount: int = Field(gt=0, strict=True, description="Amount in integer kobo (₦1 = 100 kobo), e.g. 1500050 for ₦15,000.50")
     timestamp: datetime
     last_transaction_timestamp: Optional[datetime] = None  # that catches dormant account
-    transaction_type: Literal[
-        "transfer",
-        "betting",
-        "electricity_bill",
-        "water_bill",
-        "airtime",
-        "data",
-        "cable_tv",
-    ]
+    transaction_type: TransactionType
     medium: Literal["app", "ussd", "atm_withdrawal", "online_payment"]
     geolocation: Optional[Geolocation] = None
     session: Optional[SessionData] = None

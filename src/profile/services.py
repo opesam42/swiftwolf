@@ -1,20 +1,24 @@
-import json
+import math
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
-from sqlmodel import Session, select
+from src.profile.models import Customer, HourHistogram, CategoryBaselineStats
+from src.profile.repository import CustomerRepository
 
-from src.profile.models import Customer
+from src.settlement.models import TransactionType
+from src.core.errors import InvalidSettlementData
 
+if TYPE_CHECKING:
+    from sqlmodel import Session
 
 class CustomerProfileService:
-    """Manages customer behavioral profiles, baseline caches, and statistical updates."""
+    """Manages customer behavioral profiles, baseline caches, and statistical updates.
+    All database access goes through CustomerRepository."""
 
-    def __init__(self, db_session: Session, redis_client=None):
-        self.db = db_session
-        self.redis = redis_client
-
-    def _redis_key(self, customer_id: str) -> str:
-        return f"baseline:{customer_id}"
+    def __init__(self, db_session: "Session", redis_client=None, repository: CustomerRepository | None = None):
+        # db_session and redis_client are only used to build the default
+        # repository; pass repository directly to swap it out (e.g. in tests).
+        self.repo = repository or CustomerRepository(db_session, redis_client)
 
     @staticmethod
     def build_destination_key(category: str, *identifying_fields: str) -> str:
@@ -29,100 +33,125 @@ class CustomerProfileService:
         return f"{category}:{':'.join(identifying_fields)}"
 
     @classmethod
-    def destination_key_for(cls, transaction: dict) -> str:
+    def destination_key_for(cls, transaction_type: str, provider: str, recipient:str) -> str:
         """
         Resolves a transaction's category and builds its destination key.
 
-        `beneficiary_bank_code` carries the provider for each category
-        (bank code, network, disco, platform) and `beneficiary_account`
-        carries the recipient identifier (NUBAN, phone, meter, account ref).
+        Args: 
+            transaction_type: TransactionType value (e.g., 'TRANSFER', 'AIRTIME', 'DATA', 'ELECTRICITY').
+            provider: Provider identifier for the category (e.g., bank code for transfers, telecom network for data/airtime, DISCO for electricity, platform for betting). 
+            recipient: Recipient identifier (e.g., NUBAN account number, phone number, meter number). 
+            
+        Returns: 
+            Uniform composite key formatted as '{category}:{provider}:{recipient}' (e.g., 'transfer:058:0123456789', 'data:MTN:09044556677').
         """
-        provider = transaction["beneficiary_bank_code"]
-        recipient = transaction["beneficiary_account"]
-
-        match transaction["transaction_type"]:
-            case "transfer":
+        
+        match transaction_type:
+            case TransactionType.TRANSFER:
                 return cls.build_destination_key("transfer", provider, recipient)
-            case "airtime" | "data":
+            case TransactionType.AIRTIME | TransactionType.DATA:
                 # Airtime and data top up the same phone line
                 return cls.build_destination_key("airtime", provider, recipient)
-            case "electricity_bill":
+            case TransactionType.ELECTRICITY:
                 return cls.build_destination_key("electricity", provider, recipient)
-            case "water_bill":
-                return cls.build_destination_key("water", provider, recipient)
-            case "cable_tv":
+            case TransactionType.CABLE_TV:
                 return cls.build_destination_key("cable_tv", provider, recipient)
-            case "betting":
+            case TransactionType.BETTING:
                 return cls.build_destination_key("betting", provider, recipient)
             case other:
                 raise ValueError(f"Unknown transaction_type for destination key: {other!r}")
 
+    def parse_destination_key(destination_key: str) -> tuple[str, str, str]:
+        """ Extract transaction_type, provider and recipient from the destination_key """
+        parts = destination_key.split(":", 2)
+        if len(parts) != 3: 
+            raise ValueError( f"Invalid destination_key format: '{destination_key}'. Expected format: 'transaction\_type:provider:recipient" )
 
-    def get_cached_baseline(self, customer_id: str) -> dict | None:
-        """Fast <50ms read path lookup from Redis."""
-        if self.redis is not None:
-            raw = self.redis.get(self._redis_key(customer_id))
-            if raw:
-                data = json.loads(raw if isinstance(raw, str) else raw.decode())
-                return data
+    def update_baseline_from_settled_transaction(
+            self, 
+            customer_id: str, 
+            amount: int, 
+            destination_key: str, 
+            transaction_type: TransactionType, 
+            occurred_at: datetime,
+            geolocation_lat: float | None = None, 
+            geolocation_lng: float | None = None,
+            bank_code: str | None = None
+        ) -> None:
+        """Updates customer statistics post-settlement.
+        Returns the updated Customer, so callers (e.g. SettlementService)
+        can build a response without a second database read."""
 
-        # Fallback to Postgres on cache miss
-        customer = self.db.exec(select(Customer).where(Customer.customer_id == customer_id)).first()
-        if customer is None:
-            return None
-
-        baseline = customer.to_baseline_dict()
-        self._cache_baseline(customer_id, baseline)
-        return baseline
-
-    def _cache_baseline(self, customer_id: str, baseline: dict) -> None:
-        if self.redis is not None:
-            serializable = dict(baseline)
-            self.redis.set(self._redis_key(customer_id), json.dumps(serializable), ex=86400)  # 24h TTL
-
-    def get_or_create(self, customer_id: str) -> Customer:
-        customer = self.db.exec(select(Customer).where(Customer.customer_id == customer_id)).first()
-        if customer is None:
-            customer = Customer(customer_id=customer_id)
-            self.db.add(customer)
-            self.db.commit()
-            self.db.refresh(customer)
-        return customer
-
-    def ensure_customer_row(self, customer_id: str) -> None:
-        self.get_or_create(customer_id)
-
-    def update_from_settled_transaction(self, customer_id: str, txn_data: dict) -> None:
-        """Asynchronously updates customer statistics post-settlement and refreshes Redis."""
-        customer = self.get_or_create(customer_id)
-
-        # 1. Update known destinations & bank codes
-        destination_key = self.destination_key_for(txn_data)
+        # open transaction to prevent race condition
+        customer = self.repo.get_or_create_for_update(customer_id)
+        
         known_destinations = set(customer.known_destinations or [])
         known_destinations.add(destination_key)
         customer.known_destinations = list(known_destinations)
 
-        # Bank codes are only meaningful for transfers
-        if txn_data["transaction_type"] == "transfer":
-            known_banks = set(customer.known_bank_codes or [])
-            known_banks.add(txn_data["beneficiary_bank_code"])
-            customer.known_bank_codes = list(known_banks)
+        if transaction_type == TransactionType.TRANSFER:
+            if not bank_code:
+                raise InvalidSettlementData(customer_id, "Bank Code Missing for TRANSACTION_TYPE - transfer")
+            known_bank_codes = set(customer.known_bank_codes or [])
+            known_bank_codes.add(bank_code)
+            customer.known_bank_codes = list(known_bank_codes)
 
-        # 2. Update typical hours
-        if "settled_at" in txn_data:
-            ts = txn_data["settled_at"]
-            if isinstance(ts, str):
-                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            hours = set(customer.typical_hours or [])
-            hours.add(ts.hour)
-            customer.typical_hours = list(hours)
+        # update hour histogram
+        hour = occurred_at.hour
+        hour_counts = dict(customer.typical_hours or {h: 0 for h in range(24)})
+        hour_counts[hour] = hour_counts.get(hour, 0) + 1
+        customer.typical_hours = HourHistogram(hour_to_count=hour_counts).hour_to_count
 
-        customer.is_cold_start = False
-        customer.updated_at = datetime.now(timezone.utc)
+        # update geolocation details
+        if geolocation_lat is not None and geolocation_lng is not None:
+            cell = [round(geolocation_lat, 1), round(geolocation_lng, 1)]
+            known_location_cells = list( customer.known_location_cells or [] )
+            if cell not in known_location_cells:
+                known_location_cells.append(cell)
+            customer.known_location_cells = known_location_cells
 
-        self.db.add(customer)
-        self.db.commit()
-        self.db.refresh(customer)
+        # Welford algorithm to calculate exact mean and variance on amount based on the transaction category
+        raw_stats: dict = customer.category_baselines.get(transaction_type)
+        stats: CategoryBaselineStats = CategoryBaselineStats()
+        if raw_stats:
+            stats = CategoryBaselineStats.model_validate(raw_stats)
+
+        # amount arrives in integer kobo; baselines are kept in naira so they read naturally
+        amount_naira = amount / 100.0
+
+        old_count = stats.count
+        old_avg = stats.avg_amount
+        old_m2 = stats.m2
+
+        new_count = old_count + 1
+        delta = amount_naira - old_avg
+        new_avg = old_avg + (delta / new_count)
+        delta2 = amount_naira - new_avg
+        new_m2 = old_m2 + (delta * delta2)
+
+        # Variance & Std Dev (Sample variance: count - 1)
+        if new_count > 1:
+            variance = (new_m2 / (new_count - 1)) 
+        else:
+            variance = 0.0 
+
+        new_std = math.sqrt(variance)
+
+        updated_stats = CategoryBaselineStats(
+            count = new_count,
+            avg_amount = round(new_avg, 2),
+            m2 = new_m2,
+            std_amount = round(new_std, 2)
+        )
+
+        new_category_baselines = dict(customer.category_baselines)
+        new_category_baselines[transaction_type] = updated_stats
+        customer.category_baselines = new_category_baselines
+
+        # finish transaction
+        self.repo.save(customer)
 
         # Evict / refresh cache
-        self._cache_baseline(customer_id, customer.to_baseline_dict())
+        self.repo.cache_baseline(customer_id, customer.to_baseline_dict())
+
+        return customer

@@ -1,9 +1,11 @@
 from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
-
+from pydantic import BaseModel, field_validator
 from sqlalchemy import BigInteger, Column, DateTime, text
 from sqlalchemy import JSON as SAJSON
 from sqlmodel import Field, Relationship, SQLModel
+
+from src.settlement.models import TransactionType
 
 if TYPE_CHECKING:
     from src.settlement.models import Transaction
@@ -13,6 +15,24 @@ if TYPE_CHECKING:
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
+class CategoryBaselineStats(BaseModel): 
+    count: int = Field(default=0, ge=0, description="Total settled transaction count")
+    avg_amount: float = Field( default=0.0, ge=0.0, description="Running mean amount" ) 
+    m2: float = Field( default=0.0, ge=0.0, description="Running sum of squared differences" ) 
+    std_amount: float = Field( default=0.0, ge=0.0, description="Running standard deviation" )
+
+class HourHistogram(BaseModel):
+    hour_to_count: dict[int, int] = Field(default_factory=lambda: {h: 0 for h in range(24)})
+
+    @field_validator("hour_to_count")
+    @classmethod
+    def validate_hours(cls, input: dict[int, int]) -> dict[int, int]:
+        for hour, count in input.items():
+            if not (0 <= hour <= 23):
+                raise ValueError(f"Invalid hour key: {hour}. Must be 0-23.")
+            if count < 0:
+                raise ValueError(f"Invalid count for hour {hour}: {count}. Must be >= 0.")
+        return input
 
 class Customer(SQLModel, table=True):
     __tablename__ = "customers"
@@ -31,9 +51,9 @@ class Customer(SQLModel, table=True):
     )
 
     # Statistical Baselines stored as structured JSON
-    category_baselines: dict = Field(
+    category_baselines: dict[TransactionType, CategoryBaselineStats] = Field(
         default_factory=dict, sa_column=Column(SAJSON, nullable=False),
-        description="Per transaction_type amount stats ({'avg_amount', 'std_amount'}) "
+        description="Per transaction_type amount stats ({'avg_amount', 'std_amount', etc}) "
                     "used to compute the amount-deviation Z-score.",
     )
     known_destinations: list[str] = Field(
@@ -46,8 +66,8 @@ class Customer(SQLModel, table=True):
         description="Bank codes the customer has settled transfers to. Transfers only; "
                     "drives the 'new_bank' signal.",
     )
-    typical_hours: list[int] = Field(
-        default_factory=list, sa_column=Column(SAJSON, nullable=False),
+    typical_hours: HourHistogram = Field(
+        default_factory=HourHistogram, sa_column=Column(SAJSON, nullable=False),
         description="Hours of day (0-23) the customer has settled transactions in; "
                     "drives the 'unusual_hour' signal.",
     )

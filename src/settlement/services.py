@@ -1,87 +1,84 @@
-from datetime import datetime, timezone
+import logging
 
 from fastapi import BackgroundTasks
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from src.profile.services import CustomerProfileService
-from src.settlement.models import Transaction
+from src.settlement.models import TransactionStatus
+from src.settlement.repository import TransactionRepository
+from src.core.errors import TransactionNotFoundError, InvalidSettlementData
 
+logger = logging.getLogger(__name__)
 
 class SettleService:
     """Orchestrates settlement finalization and triggers asynchronous ML state updates."""
 
-    def __init__(self, db_session: Session, redis_client=None):
-        self.db = db_session
-        self.redis = redis_client
+    def __init__(self, db_session: Session, redis_client=None, repository: TransactionRepository | None = None):
+        self.repo = repository or TransactionRepository(db_session)
         self.profile_service = CustomerProfileService(db_session, redis_client)
 
     def settle(self, payload: dict, background_tasks: BackgroundTasks) -> dict:
         txn_ref = payload["transaction_reference"]
 
-        # 1. Fetch or initialize the transaction
-        txn = self.db.exec(
-            select(Transaction).where(Transaction.transaction_reference == txn_ref)
-        ).first()
+        # Lock the row so a retried/duplicate settle call for the same reference
+        # waits here until this one commits, then sees is_settled=True below.
+        txn = self.repo.get_for_update(txn_ref)
 
         if txn is None:
-            txn = Transaction(
-                transaction_reference=txn_ref,
-                customer_id=payload["customer_id"],
-                amount=payload["amount"],
-                beneficiary_account=payload["beneficiary_account"],
-                beneficiary_bank_code=payload["beneficiary_bank_code"],
-                beneficiary_name=payload.get("beneficiary_name"),
-                transaction_type=payload["transaction_type"],
-                medium=payload["medium"],
-                occurred_at=payload.get("settled_at", datetime.now(timezone.utc)),
-            )
-            self.db.add(txn)
+            # This transaction was never scored by us — reject, don't fabricate.
+            self.repo.rollback()
+            raise TransactionNotFoundError(txn_ref)
 
-        # 2. Guard against double-settlement (ML State Protection)
+        # Guard against double-settlement
         if txn.is_settled:
+            self.repo.rollback()  # release the lock
             return {
                 "transaction_reference": txn_ref,
-                "status": "ALREADY_SETTLED",
+                "status": txn.status,
                 "is_settled": True,
-                "message": "Transaction was previously settled. Background ML updates skipped.",
+                "message": "Transaction was previously settled.",
             }
 
-        # 3. Mark settled in Postgres
-        if payload.get("status") == "SUCCESS":
-            txn.is_settled = True
-            txn.settled_at = payload.get("settled_at", datetime.now(timezone.utc))
-            self.db.add(txn)
-            self.db.commit()
-            self.db.refresh(txn)
+        # Money never moved — record the failure but leave the baseline untouched
+        if payload.get("status") == "FAILED":
+            txn.status = TransactionStatus.FAILED
+            txn.settled_at = payload["settled_at"]
+            self.repo.save(txn)
+            return {
+                "transaction_reference": txn_ref,
+                "status": txn.status,
+                "is_settled": False,
+                "message": "Transaction marked as failed settlement.",
+            }
 
-            # 4. Schedule async behavioral ML state updates (River ML + Baselines)
-            background_tasks.add_task(
-                self._run_async_updates,
-                customer_id=payload["customer_id"],
-                transaction_data=payload,
+        # Mark settled BEFORE updating the baseline: both share this session, so
+        # the profile update's commit persists the flag and the new baseline
+        # together. A crash can't leave one without the other.
+        txn.is_settled = True
+        txn.settled_at = payload["settled_at"]
+
+        try:
+            self.profile_service.update_baseline_from_settled_transaction(
+                customer_id = txn.customer_id,
+                amount = txn.amount,
+                destination_key = txn.destination_key,
+                transaction_type = txn.transaction_type,
+                occurred_at = txn.occurred_at,
+                geolocation_lat = txn.geolocation_lat or None,
+                geolocation_lng = txn.geolocation_lng or None,
+                bank_code = txn.provider or None,
             )
+        except InvalidSettlementData as e:
+            logger.warning(f"Invalid settlement data for {txn_ref}: {e}")
+            self.repo.rollback()
+            raise
+        except Exception:
+            self.repo.rollback()
+            raise
 
-            return {
-                "transaction_reference": txn_ref,
-                "status": "SETTLED",
-                "is_settled": True,
-                "message": "Transaction successfully settled. Background profile & ML updates queued.",
-            }
-
-        # Handle failed settlements
-        self.db.commit()
         return {
             "transaction_reference": txn_ref,
-            "status": "FAILED_SETTLEMENT",
-            "is_settled": False,
-            "message": "Transaction marked as failed settlement.",
+            "status": txn.status,
+            "is_settled": True,
+            "message": "Transaction successfully settled."
         }
-
-    def _run_async_updates(self, customer_id: str, transaction_data: dict) -> None:
-        """Executed asynchronously on a background worker thread."""
-        try:
-            # Update customer statistical baseline in Postgres/Redis
-            self.profile_service.update_from_settled_transaction(customer_id, transaction_data)
-        except Exception as e:
-            # In production, log to error tracking (e.g., Sentry / Datadog)
-            print(f"[Settlement Worker Error] Failed async ML update for {customer_id}: {e}")

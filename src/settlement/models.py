@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
-
-from sqlalchemy import BigInteger, Boolean, Column, DateTime, Numeric, text
+from enum import Enum
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, text
 from sqlmodel import Field, Relationship, SQLModel
 
 if TYPE_CHECKING:
@@ -12,6 +12,21 @@ if TYPE_CHECKING:
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
+class TransactionStatus(str, Enum):
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    BLOCKED = "BLOCKED"
+    STEP_UP_REQUIRED = "STEP_UP_REQUIRED"
+    FAILED = "FAILED"
+
+class TransactionType(str, Enum): 
+    TRANSFER = "TRANSFER" 
+    AIRTIME = "AIRTIME" 
+    DATA = "DATA" 
+    ELECTRICITY = "ELECTRICITY" 
+    CABLE_TV = "CABLE_TV" 
+    BETTING = "BETTING"
+    
 
 class Transaction(SQLModel, table=True):
     __tablename__ = "transactions"
@@ -20,12 +35,15 @@ class Transaction(SQLModel, table=True):
     transaction_reference: str = Field(unique=True, index=True, max_length=64)
     customer_id: str = Field(foreign_key="customers.customer_id", max_length=64, index=True)
     direction: str = Field(default="debit", max_length=10)
-    amount: float = Field(sa_column=Column(Numeric(14, 2), nullable=False))
-    beneficiary_account: str = Field(max_length=20)
-    beneficiary_bank_code: str = Field(max_length=10)
-    beneficiary_name: Optional[str] = Field(default=None, max_length=100)
+
+    # Integer kobo (₦15,000.50 -> 1500050). Convert to naira float only for statistics.
+    amount: int = Field(sa_column=Column(BigInteger, nullable=False))
+    destination_key: str = Field(max_length=100, index=True)
+    # Bank code for transfers, telecom network for airtime/data, DISCO for electricity, etc.
+    provider: str = Field(max_length=30)
     transaction_type: str = Field(max_length=30)
     medium: str = Field(max_length=20)
+    status: str = Field(default=TransactionStatus.PENDING, index=True)
 
     is_settled: bool = Field(
         default=False,

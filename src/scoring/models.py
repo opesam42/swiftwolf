@@ -1,3 +1,4 @@
+from enum import Enum
 from sqlmodel import SQLModel, Field, Column, BigInteger, Boolean, DateTime, Numeric, JSON, Relationship
 from datetime import datetime
 from typing import Optional

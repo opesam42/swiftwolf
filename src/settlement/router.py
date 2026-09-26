@@ -1,6 +1,7 @@
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from src.core.auth import verify_api_key
+from src.core.errors import TransactionNotFoundError, InvalidSettlementData
 from src.core.database import SessionDep
 from src.core.redis import RedisDep
 from src.settlement.schemas import SettleRequest, SettleResponse
@@ -21,5 +22,10 @@ async def settle_transaction_endpoint(
     Marks transaction as settled and queues River ML state updates.
     """
     payload = request.model_dump()
-    result = SettleService(db, redis_client).settle(payload, background_tasks)
+    try:
+        result = SettleService(db, redis_client).settle(payload, background_tasks)
+    except TransactionNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except InvalidSettlementData as e:
+        raise HTTPException(status_code=422, detail=str(e))
     return SettleResponse(**result)

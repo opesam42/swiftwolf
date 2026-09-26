@@ -65,7 +65,7 @@ Thumbs.db
 
 
 # DOCUMNET
-docs/
+docs/internal
 jobs/files/processed_stmt
 jobs/files/raw_stmts
 *.db

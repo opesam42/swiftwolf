@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Literal, Optional
-
-from pydantic import BaseModel, ConfigDict
+from typing import Literal
+from pydantic import BaseModel, ConfigDict, Field
+from src.settlement.models import TransactionStatus
 
 
 class SettleRequest(BaseModel):
@@ -9,10 +9,7 @@ class SettleRequest(BaseModel):
 
     transaction_reference: str
     customer_id: str
-    amount: float
-    beneficiary_account: str
-    beneficiary_bank_code: str
-    beneficiary_name: Optional[str] = None
+    amount: int = Field(gt=0, strict=True, description="Amount in integer kobo (₦1 = 100 kobo)")
     transaction_type: str
     medium: str
     settled_at: datetime
@@ -21,6 +18,6 @@ class SettleRequest(BaseModel):
 
 class SettleResponse(BaseModel):
     transaction_reference: str
-    status: str
+    status: TransactionStatus
     is_settled: bool
     message: str

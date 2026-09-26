@@ -10,10 +10,18 @@ from src.core.config import settings
 from src.core.redis import RedisDep
 
 from src.scoring.models import RiskEvent
-from src.settlement.models import Transaction
+from src.settlement.models import Transaction, TransactionStatus, TransactionType
 from src.blacklist.services import BlacklistService
 from src.profile.services import CustomerProfileService
+from src.profile.repository import CustomerRepository
 
+# Every RuleEngine decision maps to the status the Transaction row is saved with
+DECISION_TO_STATUS = {
+    "PROCEED": TransactionStatus.APPROVED,
+    "STEP_UP_LIGHT": TransactionStatus.STEP_UP_REQUIRED,
+    "STEP_UP_LIVENESS": TransactionStatus.STEP_UP_REQUIRED,
+    "BLOCK": TransactionStatus.BLOCKED,
+}
 
 
 @dataclass(slots=True, frozen=True)
@@ -143,11 +151,12 @@ class RuleEngine:
                 "is_cold_start": True,
             }
 
-        is_transfer = transaction["transaction_type"] == "transfer"
+        is_transfer = transaction["transaction_type"] == TransactionType.TRANSFER
 
-        # Blacklist keys are "{account}:{bank_code}", which only identify NUBAN transfers
+        # Blacklist keys are "{account}:{bank_code}", which only identify NUBAN transfers,
+        # where recipient is the account number and provider is the bank code
         if is_transfer:
-            blacklist_key = f"{transaction['beneficiary_account']}:{transaction['beneficiary_bank_code']}"
+            blacklist_key = f"{transaction['recipient']}:{transaction['provider']}"
             if blacklist_key in self.blacklisted_accounts:
                 return {
                     "score": 999,
@@ -163,22 +172,25 @@ class RuleEngine:
             score += 15
             reasons.append("elevated_risk_tier")
 
-        destination_key = CustomerProfileService.destination_key_for(transaction)
+        destination_key = CustomerProfileService.destination_key_for(
+            transaction["transaction_type"], transaction["provider"], transaction["recipient"]
+        )
         is_new_destination = destination_key not in baseline.get("known_destinations", [])
 
         if is_new_destination:
             score += 30
             reasons.append("new_beneficiary")
 
-        if is_transfer and transaction["beneficiary_bank_code"] not in baseline.get("known_bank_codes", []):
+        if is_transfer and transaction["provider"] not in baseline.get("known_bank_codes", []):
             score += 15
             reasons.append("new_bank")
 
         # SCORE FOR AMOUNT DEVIATION
         cat_baseline = baseline.get("category_baselines", {}).get(transaction["transaction_type"])
         if cat_baseline and cat_baseline.get("std_amount", 0) > 0:
-            # Z_SCORE = | amount - mean | / std_amount
-            z_score = abs(transaction["amount"] - cat_baseline["avg_amount"]) / cat_baseline["std_amount"]
+            # Z_SCORE = | amount - mean | / std_amount; baselines are in naira, the payload is in kobo
+            amount_naira = transaction["amount"] / 100.0
+            z_score = abs(amount_naira - cat_baseline["avg_amount"]) / cat_baseline["std_amount"]
             amount_score = self._calculate_continuous_score(z_score)
             if amount_score > 0:
                 score += amount_score
@@ -189,10 +201,11 @@ class RuleEngine:
             score += velocity_result.velocity_risk_points
             reasons.append("high_velocity_burst") 
 
-        hour = transaction["timestamp"].hour
-        if baseline.get("typical_hours") and hour not in baseline["typical_hours"]:
-            score += 15
-            reasons.append("unusual_hour")
+        # TODO - would be rewrrtien to fit the histogram stuff
+        # hour = transaction["timestamp"].hour
+        # if baseline.get("typical_hours") and hour not in baseline["typical_hours"]:
+        #     score += 15
+        #     reasons.append("unusual_hour")
 
         session = transaction.get("session")
         if session:
@@ -226,7 +239,7 @@ class RuleEngine:
         if geolocation:
             lat, lng = geolocation["lat"], geolocation["lng"]
             known_cells = baseline.get("known_location_cells", [])
-            cell = (round(lat, 1), round(lng, 1))
+            cell = [round(lat, 1), round(lng, 1)]
             if cell not in known_cells:
                 dist = self._nearest_known_distance_km(lat, lng, known_cells)
                 if dist is not None:
@@ -302,7 +315,7 @@ class RuleEngine:
     def _nearest_known_distance_km(self, lat: float, lng: float, known_cells: list[tuple[float, float]]) -> float | None:
         if not known_cells:
             return None
-        return min(self._haversine_km(lat, lng, cell, cell[2]) for cell in known_cells)
+        return min(self._haversine_km(lat, lng, cell[0], cell[1]) for cell in known_cells)
 
 class ScoreService:
     """Orchestrates synchronous scoring end-to-end."""
@@ -310,6 +323,7 @@ class ScoreService:
     def __init__(self, db_session: Session, redis_client=None):
         self.db = db_session
         self.profile_service = CustomerProfileService(db_session, redis_client)
+        self.profile_repo = CustomerRepository(db_session, redis_client)
         self.blacklist_service = BlacklistService(db_session, redis_client)
         self.rule_engine = RuleEngine()
         self.velocity_window = VelocityWindow(redis=redis_client)
@@ -334,10 +348,13 @@ class ScoreService:
         if cached is not None:
             return cached
 
-        baseline = self.profile_service.get_cached_baseline(transaction["customer_id"])
+        baseline = self.profile_repo.get_cached_baseline(transaction["customer_id"])
+
         if baseline is None:
-            profile = self.profile_service.get_or_create(transaction["customer_id"])
+            profile = self.profile_repo.get_or_create(transaction["customer_id"])
             baseline = profile.to_baseline_dict()
+
+        # transaction velocity check 
         velocity_result = self.velocity_window.record_and_check_velocity(transaction["customer_id"], transaction["transaction_reference"])
 
         self.rule_engine.blacklisted_accounts = self.blacklist_service.get_active_keys()
@@ -351,11 +368,13 @@ class ScoreService:
             customer_id=transaction["customer_id"],
             direction="debit",
             amount=transaction["amount"],
-            beneficiary_account=transaction["beneficiary_account"],
-            beneficiary_bank_code=transaction["beneficiary_bank_code"],
-            beneficiary_name=transaction.get("beneficiary_name"),
+            destination_key=CustomerProfileService.destination_key_for(
+                transaction["transaction_type"], transaction["provider"], transaction["recipient"]
+            ),
+            provider=transaction["provider"],
             transaction_type=transaction["transaction_type"],
             medium=transaction["medium"],
+            status=DECISION_TO_STATUS[result["decision"]].value,
             occurred_at=transaction["timestamp"],
             geolocation_lat=geolocation["lat"] if geolocation else None,
             geolocation_lng=geolocation["lng"] if geolocation else None,

@@ -18,11 +18,11 @@ def test_score_clean_transaction_proceeds(client, auth_headers):
         "transaction_reference": "TXN_TEST_001",
         "customer_id": "CUST_100",
         "new_beneficiary": False,
-        "beneficiary_account": "1234567890",
-        "beneficiary_bank_code": "058",
-        "amount": 5000.0,
+        "recipient": "1234567890",
+        "provider": "058",
+        "amount": 500000,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "transaction_type": "transfer",
+        "transaction_type": "TRANSFER",
         "medium": "app",
     }
 
@@ -55,11 +55,11 @@ def test_score_blacklisted_account_blocks(client, auth_headers, db_session: Sess
         "transaction_reference": "TXN_FRAUD_001",
         "customer_id": "CUST_999",
         "new_beneficiary": True,
-        "beneficiary_account": "0666666666",
-        "beneficiary_bank_code": "000015",
-        "amount": 250000.0,
+        "recipient": "0666666666",
+        "provider": "000015",
+        "amount": 25000000,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "transaction_type": "transfer",
+        "transaction_type": "TRANSFER",
         "medium": "app",
     }
 
@@ -78,11 +78,11 @@ def test_score_idempotency(client, auth_headers):
         "transaction_reference": "TXN_DUP_001",
         "customer_id": "CUST_101",
         "new_beneficiary": False,
-        "beneficiary_account": "9876543210",
-        "beneficiary_bank_code": "033",
-        "amount": 10000.0,
+        "recipient": "9876543210",
+        "provider": "033",
+        "amount": 1000000,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "transaction_type": "transfer",
+        "transaction_type": "TRANSFER",
         "medium": "app",
     }
 
@@ -266,10 +266,10 @@ def test_score_endpoint_flags_velocity_burst(client, auth_headers):
     base_payload = {
         "customer_id": "CUST_BURST",
         "new_beneficiary": False,
-        "beneficiary_account": "1234567890",
-        "beneficiary_bank_code": "058",
-        "amount": 5000.0,
-        "transaction_type": "transfer",
+        "recipient": "1234567890",
+        "provider": "058",
+        "amount": 500000,
+        "transaction_type": "TRANSFER",
         "medium": "app",
     }
 

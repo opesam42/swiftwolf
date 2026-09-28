@@ -13,7 +13,6 @@ router = APIRouter(prefix="/v1/transactions", dependencies=[Depends(verify_api_k
 @router.post("/settle", response_model=SettleResponse)
 async def settle_transaction_endpoint(
     request: SettleRequest,
-    background_tasks: BackgroundTasks,
     db: SessionDep,
     redis_client: RedisDep,
 ):
@@ -23,7 +22,7 @@ async def settle_transaction_endpoint(
     """
     payload = request.model_dump()
     try:
-        result = SettleService(db, redis_client).settle(payload, background_tasks)
+        result = SettleService(db, redis_client).settle(payload)
     except TransactionNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except InvalidSettlementData as e:

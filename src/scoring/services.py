@@ -147,7 +147,7 @@ class RuleEngine:
                 "known_destinations": [],
                 "known_bank_codes": [],
                 "category_baselines": {},
-                "typical_hours": [],
+                "typical_hours": {},
                 "is_cold_start": True,
             }
 
@@ -348,6 +348,9 @@ class ScoreService:
         if cached is not None:
             return cached
 
+        # After this block the customer row is guaranteed to exist, which the
+        # Transaction/RiskEvent foreign keys below rely on: a cached baseline is
+        # only ever written from an existing row, and a miss creates one.
         baseline = self.profile_repo.get_cached_baseline(transaction["customer_id"])
 
         if baseline is None:
@@ -359,8 +362,6 @@ class ScoreService:
 
         self.rule_engine.blacklisted_accounts = self.blacklist_service.get_active_keys()
         result = self.rule_engine.evaluate(transaction, baseline, velocity_result)
-
-        self.profile_service.ensure_customer_row(transaction["customer_id"])
 
         geolocation = transaction.get("geolocation")
         txn_row = Transaction(

@@ -1,60 +1,19 @@
-from sqlmodel import select
 from src.blacklist.models import BlacklistedAccount
+from src.blacklist.repository import BlacklistRepository
 
 class BlacklistService:
-    """ Bridge between blacklisted_accounts (Postgres) and Redis hot-path cache. 
-    
-    Redis Cache Specification: 
-    - REDIS_KEY ("blacklist:active_accounts"): 
-        - Type: Redis Set 
-        - Format: Set of UTF-8 strings formatted as "{account}:{bank_code}" 
-        - Source of Truth: Postgres blacklisted_accounts table (is_active = True) 
-        - TTL: Indefinite (invalidated/rebuilt on mutation via sync_to_redis) 
-        
-    - MARKER_KEY ("blacklist:last_synced"): 
-        - Type: Redis String ("1") 
-        - Purpose: Cache Penetration marker. 
-            - Differentiates between an empty blacklist vs. an uninitialized/flushed cache. """
-
-    REDIS_KEY = "blacklist:active_accounts"
-    MARKER_KEY = "blacklist:last_synced" # Signals that a sync occurred
+    """Blacklist operations for the rest of the app. All Postgres and Redis
+    access (and keeping the two in sync) lives in BlacklistRepository."""
 
     def __init__(self, db_session, redis_client=None):
-        self.db = db_session
-        self.redis = redis_client
+        self.repo = BlacklistRepository(db_session, redis_client)
 
     def get_active_keys(self) -> set[str]:
-        # check if key exist in Redis
-        if self.redis.exists(self.MARKER_KEY):
-            cached = self.redis.smembers(self.REDIS_KEY)
-            return {m.decode() if isinstance(m, bytes) else m for m in cached}
+        return self.repo.get_active_keys()
 
-        return self.sync_to_redis()
+    def add(self, entry: BlacklistedAccount) -> BlacklistedAccount:
+        return self.repo.add(entry)
 
-    def sync_to_redis(self, keys: set[str] | None = None) -> set[str]:
-        """ Ensure Redis is in sync with Postgres """
-        if keys is None:
-            keys = self._load_active_keys_from_postgres()
-
-        # delete the existing set and add the new keys
-        # make it atomic
-        pipe = self.redis.pipeline(transaction=True)
-        pipe.delete(self.REDIS_KEY)
-
-        if keys:
-            pipe.sadd(self.REDIS_KEY, *keys)
-
-        #  Unconditionally set the marker key so empty sets are recognized as synced 
-        pipe.set(self.MARKER_KEY, "1")
-        pipe.execute()
-
-        return keys
-
-    def _load_active_keys_from_postgres(self) -> list[str]:
-        stmt = select(
-            BlacklistedAccount.beneficiary_account,
-            BlacklistedAccount.beneficiary_bank_code,
-        ). where(BlacklistedAccount.is_active == True)
-        rows = self.db.exec(stmt).all()
-
-        return [f"{row.beneficiary_account}:{row.beneficiary_bank_code}" for row in rows]
+    def sync_to_redis(self) -> set[str]:
+        """Forces a rebuild of the Redis set from Postgres (startup warm-up, CLI)."""
+        return self.repo.sync_cache()

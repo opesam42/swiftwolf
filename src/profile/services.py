@@ -6,6 +6,7 @@ from src.profile.models import Customer, HourHistogram, CategoryBaselineStats
 from src.profile.repository import CustomerRepository
 
 from src.settlement.models import TransactionType
+from src.core.config import settings
 from src.core.errors import InvalidSettlementData
 
 if TYPE_CHECKING:
@@ -98,9 +99,10 @@ class CustomerProfileService:
 
         # update hour histogram
         hour = occurred_at.hour
-        hour_counts = dict(customer.typical_hours or {h: 0 for h in range(24)})
+        histogram = customer.get_hour_histogram()
+        hour_counts = dict(histogram.hour_to_count)
         hour_counts[hour] = hour_counts.get(hour, 0) + 1
-        customer.typical_hours = HourHistogram(hour_to_count=hour_counts).hour_to_count
+        customer.set_hour_histogram(HourHistogram(hour_to_count=hour_counts))
 
         # update geolocation details
         if geolocation_lat is not None and geolocation_lng is not None:
@@ -111,10 +113,7 @@ class CustomerProfileService:
             customer.known_location_cells = known_location_cells
 
         # Welford algorithm to calculate exact mean and variance on amount based on the transaction category
-        raw_stats: dict = customer.category_baselines.get(transaction_type)
-        stats: CategoryBaselineStats = CategoryBaselineStats()
-        if raw_stats:
-            stats = CategoryBaselineStats.model_validate(raw_stats)
+        stats = customer.get_category_stats(transaction_type)
 
         # amount arrives in integer kobo; baselines are kept in naira so they read naturally
         amount_naira = amount / 100.0
@@ -144,14 +143,17 @@ class CustomerProfileService:
             std_amount = round(new_std, 2)
         )
 
-        new_category_baselines = dict(customer.category_baselines)
-        new_category_baselines[transaction_type] = updated_stats
-        customer.category_baselines = new_category_baselines
+        customer.set_category_stats(transaction_type, updated_stats)
 
-        # finish transaction
+        # Leave cold start once enough settled history exists. The per-category counts
+        # already record every settled transaction, so no extra COUNT query is needed,
+        # and the flag commits atomically with the baseline it describes.
+        if customer.is_cold_start:
+            total_settled = sum(customer.get_category_stats(t).count for t in customer.category_baselines)
+            if total_settled >= settings.COLD_START_MIN_SETTLED_TRANSACTIONS:
+                customer.is_cold_start = False
+
+        # finish transaction; the cache_sync commit hook invalidates the cached baseline
         self.repo.save(customer)
-
-        # Evict / refresh cache
-        self.repo.cache_baseline(customer_id, customer.to_baseline_dict())
 
         return customer

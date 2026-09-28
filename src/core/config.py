@@ -42,6 +42,12 @@ class Settings(BaseSettings):
         description="Risk points added when transaction count in the window exceeds VELOCITY_MAX_THRESHOLD.",
     )
 
+    # --- Cold Start ---
+    COLD_START_MIN_SETTLED_TRANSACTIONS: int = Field(
+        default=10,
+        description="Settled transactions (across all categories) after which a customer leaves cold start.",
+    )
+
     # 4. Feed the absolute path directly to Pydantic
     model_config = SettingsConfigDict(
         env_file=ENV_FILE_PATH, 

@@ -41,7 +41,7 @@ class SettleService:
 
         # Money never moved — record the failure but leave the baseline untouched
         if payload.get("status") == "FAILED":
-            txn.status = TransactionStatus.FAILED
+            txn.status = TransactionStatus.FAILED.value
             txn.settled_at = payload["settled_at"]
             self.repo.save(txn)
             return {
@@ -51,9 +51,7 @@ class SettleService:
                 "message": "Transaction marked as failed settlement.",
             }
 
-        # Mark settled BEFORE updating the baseline: both share this session, so
-        # the profile update's commit persists the flag and the new baseline
-        # together. A crash can't leave one without the other.
+        # UPDATE CUSTOMER RISK PROFILE
         txn.is_settled = True
         txn.settled_at = payload["settled_at"]
 

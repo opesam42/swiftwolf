@@ -1,44 +1,64 @@
 # src/profile/repository.py
 
 import json
+import logging
 
+from redis.exceptions import RedisError
 from sqlmodel import Session, select
 from src.profile.models import Customer
+from src.profile.cache_sync import REDIS_CLIENT_INFO_KEY
+
+logger = logging.getLogger(__name__)
 
 BASELINE_CACHE_TTL_SECONDS = 86400  # 24h
 
 class CustomerRepository:
     """Owns all direct database and cache access for Customer rows. Services
-    never touch SQLModel/SQLAlchemy or Redis directly — they only call methods here."""
+    never touch SQLModel/SQLAlchemy or Redis directly — they only call methods here.
+
+    ⚠️ ARCHITECTURAL WARNING: Automatic Redis cache invalidation relies on SQLAlchemy ORM session tracking. ALWAYS mutate loaded SQLModel instances (e.g., customer.field = value). DO NOT run raw SQL string updates (e.g., UPDATE customer SET ...) on the Customer table, as raw SQL bypasses ORM unit-of-work tracking and will cause stale Redis cache keys!
+    """
 
     def __init__(self, db_session: Session, redis_client=None):
         self.db = db_session
         self.redis = redis_client
+        if redis_client is not None:
+            # lets the cache_sync commit hook reach Redis for this session
+            self.db.info[REDIS_CLIENT_INFO_KEY] = redis_client
 
-    def _redis_key(self, customer_id: str) -> str:
+    @staticmethod
+    def baseline_cache_key(customer_id: str) -> str:
+        # Return dynamic cache key for the customer
         return f"baseline:{customer_id}"
 
     def get_cached_baseline(self, customer_id: str) -> dict | None:
-        """Returns customer risk profile from cache."""
+        """Returns the customer's baseline from Redis, falling back to
+        Postgres (and re-filling the cache) on a miss or Redis failure."""
         if self.redis is not None:
-            raw = self.redis.get(self._redis_key(customer_id))
+            try:
+                raw = self.redis.get(baseline_cache_key(customer_id))
+            except RedisError as e:
+                logger.warning(f"Baseline cache read failed for {customer_id}, using Postgres: {e}")
+                raw = None
             if raw:
-                data = json.loads(raw if isinstance(raw, str) else raw.decode())
-                return data
+                return json.loads(raw if isinstance(raw, str) else raw.decode())
 
-        # Fallback to Postgres on cache miss
         customer = self.get(customer_id)
         if customer is None:
             return None
 
         baseline = customer.to_baseline_dict()
-        self.cache_baseline(customer_id, baseline)
+        self._fill_cache(customer_id, baseline)
         return baseline
 
-    def cache_baseline(self, customer_id: str, baseline: dict) -> None:
-        if self.redis is not None:
-            serializable = dict(baseline)
-            self.redis.set(self._redis_key(customer_id), json.dumps(serializable), ex=BASELINE_CACHE_TTL_SECONDS)
+    def _fill_cache(self, customer_id: str, baseline: dict) -> None:
+        """Read-path only. Never call this after a write — the commit hook handles that."""
+        if self.redis is None:
+            return
+        try:
+            self.redis.set(baseline_cache_key(customer_id), json.dumps(baseline), ex=BASELINE_CACHE_TTL_SECONDS)
+        except RedisError as e:
+            logger.warning(f"Baseline cache fill failed for {customer_id}: {e}")
 
     def get(self, customer_id: str) -> Customer | None:
         """Plain read, no lock. Returns None if the customer doesn't exist yet."""
@@ -84,7 +104,8 @@ class CustomerRepository:
 
     def save(self, customer: Customer) -> Customer:
         """Commits the current transaction and refreshes the object
-        from the database."""
+        from the database. The cached baseline is invalidated by the
+        cache_sync commit hook, not here."""
         self.db.add(customer)
         self.db.commit()
         self.db.refresh(customer)

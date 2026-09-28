@@ -1,6 +1,6 @@
 # src/settlement/repository.py
 
-from sqlmodel import Session, select
+from sqlmodel import Session, select, func
 from src.settlement.models import Transaction
 
 class TransactionRepository:
@@ -37,3 +37,13 @@ class TransactionRepository:
     def rollback(self) -> None:
         """Discards all uncommitted changes and releases any row locks."""
         self.db.rollback()
+
+    def get_count_for_customer_transaction(self, customer_id: str) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(Transaction)
+            .where(Transaction.is_settled == True)
+            .where(Transaction.customer_id == customer_id)
+        )
+        count = self.db.exec(stmt).one()
+        return count

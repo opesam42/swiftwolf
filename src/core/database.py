@@ -10,6 +10,7 @@ from src.blacklist.models import BlacklistedAccount  # noqa: F401
 from src.scoring.models import RiskEvent  # noqa: F401
 from src.settlement.models import Transaction  # noqa: F401
 from src.profile.models import Customer  # noqa: F401
+import src.profile.cache_sync  # noqa: F401  registers the Customer -> Redis invalidation hooks on every Session
 
 DATABASE_URL = settings.DATABASE_URL
 

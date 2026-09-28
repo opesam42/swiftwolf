@@ -5,6 +5,7 @@ from sqlmodel import Session
 from src.admin.services import BeneficiaryExportService, OnboardingService
 from src.core.config import settings
 from src.core.database import SessionDep
+from src.core.redis import RedisDep
 
 admin_key_header = APIKeyHeader(name="X-SwiftWolf-Admin-Key", auto_error=True)
 
@@ -27,7 +28,7 @@ async def export_beneficiaries_endpoint(db: SessionDep):
 
 
 @router.post("/customers/{customer_id}/seed")
-async def seed_customer_endpoint(customer_id: str, db: SessionDep, risk_tier: str = "standard"):
+async def seed_customer_endpoint(customer_id: str, db: SessionDep, redis_client: RedisDep, risk_tier: str = "standard"):
     """Admin endpoint to initialize or re-seed customer baseline profiles."""
-    customer = OnboardingService(db).seed_demo_customer(customer_id, risk_tier)
+    customer = OnboardingService(db, redis_client).seed_demo_customer(customer_id, risk_tier)
     return {"status": "seeded", "customer_id": customer.customer_id, "risk_tier": customer.risk_tier}

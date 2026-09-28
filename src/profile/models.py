@@ -50,11 +50,12 @@ class Customer(SQLModel, table=True):
         description="'standard' or 'elevated'. Elevated customers get +15 risk points on every score.",
     )
 
-    # Statistical Baselines stored as structured JSON
-    category_baselines: dict[TransactionType, CategoryBaselineStats] = Field(
+    # Statistical baselines. JSON columns only ever hold plain JSON-compatible data;
+    # use the get_/set_ helpers below to work with them as validated Pydantic objects.
+    category_baselines: dict[str, dict] = Field(
         default_factory=dict, sa_column=Column(SAJSON, nullable=False),
-        description="Per transaction_type amount stats ({'avg_amount', 'std_amount', etc}) "
-                    "used to compute the amount-deviation Z-score.",
+        description="Per transaction_type amount stats, as plain CategoryBaselineStats dumps "
+                    "({'count', 'avg_amount', 'm2', 'std_amount'}), used for the amount-deviation Z-score.",
     )
     known_destinations: list[str] = Field(
         default_factory=list, sa_column=Column(SAJSON, nullable=False),
@@ -66,10 +67,11 @@ class Customer(SQLModel, table=True):
         description="Bank codes the customer has settled transfers to. Transfers only; "
                     "drives the 'new_bank' signal.",
     )
-    typical_hours: HourHistogram = Field(
-        default_factory=HourHistogram, sa_column=Column(SAJSON, nullable=False),
-        description="Hours of day (0-23) the customer has settled transactions in; "
-                    "drives the 'unusual_hour' signal.",
+    typical_hours: dict[str, int] = Field(
+        default_factory=dict, sa_column=Column(SAJSON, nullable=False),
+        description="Settled-transaction count per hour of day, keyed by hour as a string "
+                    "('0'-'23', since JSON keys are always strings); empty until the first "
+                    "settlement. Drives the 'unusual_hour' signal.",
     )
     known_location_cells: list[list[float]] = Field(
         default_factory=list, sa_column=Column(SAJSON, nullable=False),
@@ -97,15 +99,36 @@ class Customer(SQLModel, table=True):
     risk_events: list["RiskEvent"] = Relationship(back_populates="customer")
 
 
+    def get_category_stats(self, transaction_type: str) -> CategoryBaselineStats:
+        """Reads one category's stats out of the JSON column as a validated object."""
+        raw = (self.category_baselines or {}).get(TransactionType(transaction_type).value)
+        return CategoryBaselineStats.model_validate(raw) if raw else CategoryBaselineStats()
+
+    def set_category_stats(self, transaction_type: str, stats: CategoryBaselineStats) -> None:
+        """Writes one category's stats back as plain JSON. Reassigns the whole dict
+        so SQLAlchemy notices the change (in-place JSON mutation isn't tracked)."""
+        updated = dict(self.category_baselines or {})
+        updated[TransactionType(transaction_type).value] = stats.model_dump()
+        self.category_baselines = updated
+
+    def get_hour_histogram(self) -> HourHistogram:
+        """Reads typical_hours as a validated histogram; Pydantic turns the JSON
+        string keys ('5') back into int hours (5)."""
+        return HourHistogram.model_validate({"hour_to_count": self.typical_hours or {}})
+
+    def set_hour_histogram(self, histogram: HourHistogram) -> None:
+        """Writes the histogram back as plain JSON with string hour keys."""
+        self.typical_hours = {str(hour): count for hour, count in histogram.hour_to_count.items()}
+
     def to_baseline_dict(self) -> dict:
         """Converts database entity into lightweight cacheable dictionary for RuleEngine."""
         return {
             "customer_id": self.customer_id,
             "risk_tier": self.risk_tier,
-            "category_baselines": self.category_baselines or {},
+            "category_baselines": dict(self.category_baselines or {}),
             "known_destinations": self.known_destinations or [],
             "known_bank_codes": self.known_bank_codes or [],
-            "typical_hours": self.typical_hours or [],
+            "typical_hours": dict(self.typical_hours or {}),
             "known_location_cells": [list(c) for c in (self.known_location_cells or [])],
             "is_cold_start": self.is_cold_start,
         }

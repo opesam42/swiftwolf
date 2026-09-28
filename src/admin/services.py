@@ -2,6 +2,7 @@ from sqlmodel import Session, select
 
 from src.blacklist.models import BlacklistedAccount
 from src.profile.models import Customer
+from src.profile.repository import CustomerRepository
 
 
 class BeneficiaryExportService:
@@ -31,14 +32,11 @@ class BeneficiaryExportService:
 class OnboardingService:
     """Manages administrative customer seeding and demo data initialization."""
 
-    def __init__(self, db_session: Session):
-        self.db = db_session
+    def __init__(self, db_session: Session, redis_client=None):
+        self.customer_repo = CustomerRepository(db_session, redis_client)
 
     def seed_demo_customer(self, customer_id: str, risk_tier: str = "standard") -> Customer:
-        customer = self.db.exec(select(Customer).where(Customer.customer_id == customer_id)).first()
+        customer = self.customer_repo.get(customer_id)
         if customer is None:
-            customer = Customer(customer_id=customer_id, risk_tier=risk_tier)
-            self.db.add(customer)
-            self.db.commit()
-            self.db.refresh(customer)
+            customer = self.customer_repo.save(Customer(customer_id=customer_id, risk_tier=risk_tier))
         return customer

@@ -25,7 +25,7 @@ def seed_blacklist(
     reason: str = typer.Option("manual_flag", help="Blacklist reason"),
     added_by: str = typer.Option("cli_admin", help="Analyst or system identifier"),
 ):
-    """Adds a new blacklisted account and triggers an atomic Redis sync."""
+    """Adds a new blacklisted account; the repository rebuilds the Redis set after commit."""
     with Session(engine) as db:
         entry = BlacklistedAccount(
             beneficiary_account=account,
@@ -34,12 +34,7 @@ def seed_blacklist(
             source=BlacklistSource.ANALYST,
             added_by=added_by,
         )
-        db.add(entry)
-        db.commit()
-
-        # Atomically sync updated state to Redis
-        redis_client = get_redis_client()
-        BlacklistService(db, redis_client).sync_to_redis()
+        BlacklistService(db, get_redis_client()).add(entry)
 
         typer.echo(f"Successfully blacklisted account {account}:{bank_code} and updated Redis cache.")
 

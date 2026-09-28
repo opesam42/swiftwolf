@@ -8,7 +8,7 @@ from src.core.redis import RedisDep
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(verify_api_key)])
 
-
+""" 
 @router.get("/customers/{customer_id}/baseline", response_model=BaselineResponse)
 async def get_customer_baseline(customer_id: str, db: SessionDep, redis_client: RedisDep):
     service = CustomerProfileService(db, redis_client)
@@ -38,4 +38,4 @@ async def get_friction_profile(customer_id: str, db: SessionDep, redis_client: R
         recommended_friction=recommended,
         risk_tier=risk_tier,
         reasons=["Elevated risk tier"] if risk_tier == "elevated" else ["Normal behavior"],
-    )
+    ) """

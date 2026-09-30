@@ -15,7 +15,8 @@ async def score_transaction_endpoint(
     db: SessionDep,
     redis_client: RedisDep,
 ):
-    """Called synchronously by the bank app before calling NIBSS (<50ms SLA)."""
+    """Scores a payment before the bank sends it to NIBSS, returning PROCEED, STEP_UP or BLOCK
+    with the reasons. Repeating a transaction_reference returns the original decision."""
     transaction = {
         "transaction_reference": request.transaction_reference,
         "customer_id": request.customer_id,

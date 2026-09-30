@@ -17,8 +17,9 @@ async def settle_transaction_endpoint(
     redis_client: RedisDep,
 ):
     """
-    Called asynchronously post-settlement.
-    Marks transaction as settled and queues River ML state updates.
+    Reports a scored payment's final outcome (SUCCESS or FAILED) and, after a step-up,
+    which verification the bank used and how it ended. A SUCCESS updates the customer's
+    behavioural baseline before responding. Unscored references return 404; retries are safe.
     """
     payload = request.model_dump()
     try:

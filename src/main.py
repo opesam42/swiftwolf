@@ -5,7 +5,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlmodel import Session
 
-from src.core.config import settings
 from src.core.database import db_init, engine
 from src.core.redis import get_redis_client
 
@@ -70,19 +69,14 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # Register Domain Routers
-app.include_router(scoring_router, tags=["Real-time Scoring (<500ms SLA)"])
-app.include_router(settlement_router, tags=["Transaction Settlement & Async ML"])
+app.include_router(scoring_router, tags=["Real-time Scoring"])
+app.include_router(settlement_router, tags=["Transaction Settlement"])
 app.include_router(profile_router, tags=["Customer Insights & Baselines"])
 app.include_router(admin_router, tags=["Internal Administration"])
 
 
-# Health Check Endpoint
-@app.get("/health", tags=["Infrastructure"])
+# Health Check: ping the base URL. No auth, no dependencies — a 200 means the process is up.
+@app.get("/", tags=["Infrastructure"])
 async def health_check():
-    """Liveness probe used by load balancers and orchestrators."""
-    return {
-        "status": "healthy",
-        "service": "SwiftWolf",
-        "version": "2.0.0",
-        "environment": settings.ENVIRONMENT,
-    }
+    """Liveness ping for load balancers, uptime monitors and integrators."""
+    return {"status": "ok", "service": "SwiftWolf"}

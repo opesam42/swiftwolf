@@ -18,12 +18,14 @@ class SessionData(BaseModel):
 class ScoreRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    transaction_reference: str
-    customer_id: str
+    # Lengths match the DB columns, so an over-long value is a 422 here rather than a DB error (500)
+    transaction_reference: str = Field(min_length=1, max_length=64)
+    customer_id: str = Field(min_length=1, max_length=64)
     # provider: bank code for transfers, telecom network for airtime/data, DISCO for electricity, etc.
-    provider: str
+    provider: str = Field(min_length=1, max_length=30)
     # recipient: NUBAN account number, phone number, meter number, etc.
-    recipient: str
+    # 50 keeps destination_key ("{category}:{provider}:{recipient}", varchar(100)) in bounds
+    recipient: str = Field(min_length=1, max_length=50)
     amount: int = Field(gt=0, strict=True, description="Amount in integer kobo (₦1 = 100 kobo), e.g. 1500050 for ₦15,000.50")
     timestamp: datetime
     last_transaction_timestamp: Optional[datetime] = None  # that catches dormant account

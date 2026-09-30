@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from src.settlement.models import TransactionStatus, VerificationMethod, VerificationOutcome
 
 
@@ -9,7 +9,7 @@ class SettleRequest(BaseModel):
     destination are read from the transaction SwiftWolf scored, so they can't disagree."""
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    transaction_reference: str
+    transaction_reference: str = Field(min_length=1, max_length=64)
     settled_at: datetime
     status: Literal["SUCCESS", "FAILED"] = "SUCCESS"
 

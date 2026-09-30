@@ -6,6 +6,11 @@ import os
 os.environ.setdefault(
     "DATABASE_URL", "postgresql+psycopg2://postgres:postgres@localhost:5432/postgres"
 )
+# Forced, not setdefault: tests must never reach the REDIS_URL in .env (a real,
+# shared Redis). Every test uses fakeredis; this unreachable local URL is a
+# safety net so any code path that still builds a real client fails fast
+# instead of touching real data.
+os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"
 os.environ.setdefault("SWIFTWOLF_API_KEY", "test-secret-key")
 os.environ.setdefault("ADMIN_API_KEY", "test-admin-key")
 
@@ -108,7 +113,7 @@ def fake_redis_fixture():
 
 
 @pytest.fixture(name="client")
-def client_fixture(db_session: Session, fake_redis):
+def client_fixture(db_session: Session, fake_redis, monkeypatch):
     """Overrides FastAPI's database and Redis dependencies with test doubles."""
 
     def get_db_session_override():
@@ -119,6 +124,10 @@ def client_fixture(db_session: Session, fake_redis):
 
     app.dependency_overrides[get_db_session] = get_db_session_override
     app.dependency_overrides[get_redis_client] = get_redis_override
+    # dependency_overrides only covers request handlers. The lifespan startup calls
+    # get_redis_client() directly (to warm the blacklist cache), via the name
+    # src.main imported — patch that too, or startup talks to the real REDIS_URL.
+    monkeypatch.setattr(main_module, "get_redis_client", get_redis_override)
 
     with TestClient(app) as client:
         yield client

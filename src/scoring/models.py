@@ -6,8 +6,15 @@ from src.profile.models import Customer
 from src.settlement.models import Transaction
 from datetime import datetime, timezone 
 
-def utcnow() -> datetime: 
+def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+class Decision(str, Enum):
+    """What SwiftWolf advises the bank app to do. SwiftWolf never picks the
+    verification method — on STEP_UP the bank app chooses (OTP, liveness, etc.)."""
+    PROCEED = "PROCEED"
+    STEP_UP = "STEP_UP"
+    BLOCK = "BLOCK"
 
 class RiskEvent(SQLModel, table=True):
     __tablename__ = "risk_events"
@@ -16,8 +23,7 @@ class RiskEvent(SQLModel, table=True):
     transaction_reference: str = Field(foreign_key="transactions.transaction_reference", unique=True, max_length=64)
     customer_id: str = Field(foreign_key="customers.customer_id", max_length=64)
     score: int = Field()
-    decision: str = Field(max_length=20)
-    step_up_method: Optional[str] = Field(default=None, max_length=20)
+    decision: str = Field(max_length=20)  # a Decision value
     reasons: list[str] = Field(default_factory=list, sa_column=Column(JSON, nullable=False))
     anomaly_score: Optional[float] = Field(
         default=None,

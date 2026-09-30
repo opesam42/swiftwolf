@@ -17,7 +17,7 @@ class SettleService:
         self.repo = repository or TransactionRepository(db_session)
         self.profile_service = CustomerProfileService(db_session, redis_client)
 
-    def settle(self, payload: dict, background_tasks: BackgroundTasks) -> dict:
+    def settle(self, payload: dict) -> dict:
         txn_ref = payload["transaction_reference"]
 
         # Lock the row so a retried/duplicate settle call for the same reference

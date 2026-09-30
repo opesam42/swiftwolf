@@ -6,11 +6,14 @@ import logging
 from redis.exceptions import RedisError
 from sqlmodel import Session, select
 from src.profile.models import Customer
-from src.profile.cache_sync import REDIS_CLIENT_INFO_KEY
 
 logger = logging.getLogger(__name__)
 
 BASELINE_CACHE_TTL_SECONDS = 86400  # 24h
+
+# session.info slot holding the Redis client, read by the cache_sync commit hook.
+# Defined here (not in cache_sync) so imports only go cache_sync -> repository.
+REDIS_CLIENT_INFO_KEY = "redis_client"
 
 class CustomerRepository:
     """Owns all direct database and cache access for Customer rows. Services
@@ -36,7 +39,7 @@ class CustomerRepository:
         Postgres (and re-filling the cache) on a miss or Redis failure."""
         if self.redis is not None:
             try:
-                raw = self.redis.get(baseline_cache_key(customer_id))
+                raw = self.redis.get(self.baseline_cache_key(customer_id))
             except RedisError as e:
                 logger.warning(f"Baseline cache read failed for {customer_id}, using Postgres: {e}")
                 raw = None
@@ -56,7 +59,7 @@ class CustomerRepository:
         if self.redis is None:
             return
         try:
-            self.redis.set(baseline_cache_key(customer_id), json.dumps(baseline), ex=BASELINE_CACHE_TTL_SECONDS)
+            self.redis.set(self.baseline_cache_key(customer_id), json.dumps(baseline), ex=BASELINE_CACHE_TTL_SECONDS)
         except RedisError as e:
             logger.warning(f"Baseline cache fill failed for {customer_id}: {e}")
 

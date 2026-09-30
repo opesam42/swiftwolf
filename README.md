@@ -77,8 +77,7 @@ Additive scoring is then mapped to a decision:
 | Score | Decision |
 |---|---|
 | ≤ 30 | `PROCEED` |
-| 31–60 | `STEP_UP_LIGHT` (OTP) |
-| 61–100 | `STEP_UP_LIVENESS` (BVN liveness on app, security question on USSD/ATM) |
+| 31–100 | `STEP_UP` (the bank app chooses the verification: OTP, BVN liveness, security question, etc.) |
 | > 100 | `BLOCK` |
 
 **One override sits above all of this:** a blacklisted destination account short-circuits straight to `BLOCK`, with no step-up offered at all — regardless of every other signal. This is deliberate. Step-up verification proves the *sender* is who they claim to be; it says nothing about whether the *destination* is legitimate. A blacklisted account is a confirmed-bad destination, and a real customer being socially engineered would pass their own liveness check perfectly while the money still lands in a known-bad account. That gap is closed by making the blacklist an unconditional override, not an additive weight.
@@ -189,7 +188,6 @@ Called synchronously, before the bank app calls NIBSS.
   "geolocation": { "lat": 6.5244, "lng": 3.3792 },
   "session": {
     "login_to_transfer_seconds": 1.4,
-    "active_call_detected": true,
     "pasted_beneficiary": true
   }
 }
@@ -199,14 +197,13 @@ Called synchronously, before the bank app calls NIBSS.
 ```json
 {
   "transaction_reference": "txn_ref_a1b2c3",
-  "score": 185,
+  "score": 135,
   "decision": "BLOCK",
-  "step_up_method": "bvn_liveness",
-  "reasons": ["new_beneficiary", "new_bank", "bot_speed_timing", "active_call", "pasted_new_beneficiary"]
+  "reasons": ["new_beneficiary", "new_bank", "bot_speed_timing", "pasted_new_beneficiary"]
 }
 ```
 
-`step_up_method` is one of `bvn_liveness` (app only), `security_question` (fallback for app, only option for USSD/ATM), `otp`, or `null` (when `decision` is `PROCEED`, or on a blacklist-triggered `BLOCK`, which offers no step-up at all).
+`decision` is one of `PROCEED`, `STEP_UP` or `BLOCK`. On `STEP_UP`, SwiftWolf does not pick the verification method — the bank app chooses it for its channel (e.g. OTP, BVN liveness in the app, a security question on USSD).
 
 ### `POST /v1/transactions/settle`
 

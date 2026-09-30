@@ -53,7 +53,7 @@ def test_customer_change_committed_by_another_repository_invalidates_cache(db_se
             amount=500000,
             destination_key="transfer:058:1234567890",
             provider="058",
-            transaction_type="TRANSFER",
+            transaction_type="transfer",
             medium="app",
             occurred_at=datetime.now(timezone.utc),
         )

@@ -20,12 +20,12 @@ class TransactionStatus(str, Enum):
     FAILED = "FAILED"
 
 class TransactionType(str, Enum): 
-    TRANSFER = "TRANSFER" 
-    AIRTIME = "AIRTIME" 
-    DATA = "DATA" 
-    ELECTRICITY = "ELECTRICITY" 
-    CABLE_TV = "CABLE_TV" 
-    BETTING = "BETTING"
+    TRANSFER = "transfer"
+    AIRTIME = "airtime"
+    DATA = "data"
+    ELECTRICITY = "electricity"
+    CABLE_TV = "cable_tv"
+    BETTING = "betting"
     
 
 class Transaction(SQLModel, table=True):

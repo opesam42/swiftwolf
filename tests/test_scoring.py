@@ -17,12 +17,11 @@ def test_score_clean_transaction_proceeds(client, auth_headers):
     payload = {
         "transaction_reference": "TXN_TEST_001",
         "customer_id": "CUST_100",
-        "new_beneficiary": False,
         "recipient": "1234567890",
         "provider": "058",
         "amount": 500000,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "transaction_type": "TRANSFER",
+        "transaction_type": "transfer",
         "medium": "app",
     }
 
@@ -31,7 +30,9 @@ def test_score_clean_transaction_proceeds(client, auth_headers):
 
     data = response.json()
     assert data["transaction_reference"] == "TXN_TEST_001"
-    assert data["decision"] in ["PROCEED", "STEP_UP_LIGHT"]
+    # A first-time customer's first transfer is a new recipient at a new bank (+45),
+    # so it may be challenged — but a clean transaction is never blocked
+    assert data["decision"] in ["PROCEED", "STEP_UP"]
     assert "blacklisted_account" not in data["reasons"]
 
 
@@ -54,12 +55,11 @@ def test_score_blacklisted_account_blocks(client, auth_headers, db_session: Sess
     payload = {
         "transaction_reference": "TXN_FRAUD_001",
         "customer_id": "CUST_999",
-        "new_beneficiary": True,
         "recipient": "0666666666",
         "provider": "000015",
         "amount": 25000000,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "transaction_type": "TRANSFER",
+        "transaction_type": "transfer",
         "medium": "app",
     }
 
@@ -77,12 +77,11 @@ def test_score_idempotency(client, auth_headers):
     payload = {
         "transaction_reference": "TXN_DUP_001",
         "customer_id": "CUST_101",
-        "new_beneficiary": False,
         "recipient": "9876543210",
         "provider": "033",
         "amount": 1000000,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "transaction_type": "TRANSFER",
+        "transaction_type": "transfer",
         "medium": "app",
     }
 
@@ -265,11 +264,10 @@ def test_score_endpoint_flags_velocity_burst(client, auth_headers):
     threshold = settings.VELOCITY_MAX_THRESHOLD
     base_payload = {
         "customer_id": "CUST_BURST",
-        "new_beneficiary": False,
         "recipient": "1234567890",
         "provider": "058",
         "amount": 500000,
-        "transaction_type": "TRANSFER",
+        "transaction_type": "transfer",
         "medium": "app",
     }
 

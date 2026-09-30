@@ -5,6 +5,7 @@ from sqlmodel import Session, select
 from src.core.config import settings
 from src.profile.cache_sync import baseline_cache_key
 from src.profile.models import Customer
+from src.scoring.models import Decision
 from src.scoring.services import DECISION_TO_STATUS
 
 
@@ -13,12 +14,11 @@ def _score(client, auth_headers, transaction_reference: str, customer_id: str = 
     payload = {
         "transaction_reference": transaction_reference,
         "customer_id": customer_id,
-        "new_beneficiary": False,
         "recipient": "1234567890",
         "provider": "058",
         "amount": 500000,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "transaction_type": "TRANSFER",
+        "transaction_type": "transfer",
         "medium": "app",
     }
     response = client.post("/v1/score", json=payload, headers=auth_headers)
@@ -31,7 +31,7 @@ def _settle_payload(transaction_reference: str, status: str = "SUCCESS") -> dict
         "transaction_reference": transaction_reference,
         "customer_id": "CUST_100",
         "amount": 500000,
-        "transaction_type": "TRANSFER",
+        "transaction_type": "transfer",
         "medium": "app",
         "settled_at": datetime.now(timezone.utc).isoformat(),
         "status": status,
@@ -42,7 +42,7 @@ def _transfer_baseline_count(db_session: Session, customer_id: str) -> int:
     """How many settled transfers the customer's baseline has learned from."""
     db_session.expire_all()
     customer = db_session.exec(select(Customer).where(Customer.customer_id == customer_id)).one()
-    return (customer.category_baselines.get("TRANSFER") or {}).get("count", 0)
+    return (customer.category_baselines.get("transfer") or {}).get("count", 0)
 
 
 def test_settle_unscored_transaction_returns_404(client, auth_headers):
@@ -61,7 +61,7 @@ def test_settle_transaction_success(client, auth_headers, db_session):
     data = response.json()
     assert data["is_settled"] is True
     # status keeps the scoring outcome; settlement is carried by is_settled
-    assert data["status"] == DECISION_TO_STATUS[scored["decision"]].value
+    assert data["status"] == DECISION_TO_STATUS[Decision(scored["decision"])].value
     assert _transfer_baseline_count(db_session, "CUST_100") == 1
 
 

@@ -33,11 +33,10 @@ from sqlalchemy import event
 from sqlalchemy.orm import Session
 
 from src.profile.models import Customer
-from src.profile.repository import CustomerRepository
+from src.profile.repository import REDIS_CLIENT_INFO_KEY, CustomerRepository
 
 logger = logging.getLogger(__name__)
 
-REDIS_CLIENT_INFO_KEY = "redis_client"
 _CHANGED_CUSTOMERS_INFO_KEY = "changed_customer_ids"    # a placeholder or key for sql achemy to recognize the keys that are to be deleted
 
 

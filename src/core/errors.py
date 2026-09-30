@@ -13,7 +13,7 @@ class SettlementError(Exception):
     pass
 
 class InvalidSettlementData(SettlementError, ValueError): 
-    """Raised when settlement payload violates domain invariants (e.g., missing bank\_code for transfer).""" 
+    """Raised when settlement payload violates domain invariants (e.g., missing bank_code for transfer).""" 
     def __init__(self, customer_id: str, message: str): 
         self.customer_id = customer_id 
         self.message = message 

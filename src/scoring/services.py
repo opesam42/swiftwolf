@@ -9,7 +9,7 @@ from redis.exceptions import RedisError
 from src.core.config import settings
 from src.core.redis import RedisDep
 
-from src.scoring.models import RiskEvent
+from src.scoring.models import Decision, RiskEvent
 from src.settlement.models import Transaction, TransactionStatus, TransactionType
 from src.blacklist.services import BlacklistService
 from src.profile.services import CustomerProfileService
@@ -17,10 +17,9 @@ from src.profile.repository import CustomerRepository
 
 # Every RuleEngine decision maps to the status the Transaction row is saved with
 DECISION_TO_STATUS = {
-    "PROCEED": TransactionStatus.APPROVED,
-    "STEP_UP_LIGHT": TransactionStatus.STEP_UP_REQUIRED,
-    "STEP_UP_LIVENESS": TransactionStatus.STEP_UP_REQUIRED,
-    "BLOCK": TransactionStatus.BLOCKED,
+    Decision.PROCEED: TransactionStatus.APPROVED,
+    Decision.STEP_UP: TransactionStatus.STEP_UP_REQUIRED,
+    Decision.BLOCK: TransactionStatus.BLOCKED,
 }
 
 
@@ -160,8 +159,7 @@ class RuleEngine:
             if blacklist_key in self.blacklisted_accounts:
                 return {
                     "score": 999,
-                    "decision": "BLOCK",
-                    "step_up_method": None,
+                    "decision": Decision.BLOCK,
                     "reasons": ["blacklisted_account"],
                 }
 
@@ -212,9 +210,6 @@ class RuleEngine:
             if session.get("login_to_transfer_seconds", 999) < 2:
                 score += 40
                 reasons.append("bot_speed_timing")
-            if session.get("active_call_detected"):
-                score += 50
-                reasons.append("active_call")
             if session.get("pasted_beneficiary") and is_new_destination:
                 score += 10
                 reasons.append("pasted_new_beneficiary")
@@ -250,13 +245,9 @@ class RuleEngine:
                         score += 10
                         reasons.append("location_deviation_minor")
 
-        decision = self._decide(score)
-        step_up_method = self._pick_step_up_method(decision, transaction["medium"])
-
         return {
             "score": score,
-            "decision": decision,
-            "step_up_method": step_up_method,
+            "decision": self._decide(score),
             "reasons": reasons,
         }
 
@@ -285,24 +276,13 @@ class RuleEngine:
         return int( round(score, 0) )
 
     @staticmethod
-    def _decide(score: int) -> str:
+    def _decide(score: int) -> Decision:
+        # On STEP_UP the bank app chooses the verification method, not SwiftWolf
         if score <= 30:
-            return "PROCEED"
-        if score <= 60:
-            return "STEP_UP_LIGHT"
+            return Decision.PROCEED
         if score <= 100:
-            return "STEP_UP_LIVENESS"
-        return "BLOCK"
-
-    @staticmethod
-    def _pick_step_up_method(decision: str, medium: str) -> str | None:
-        if decision == "PROCEED":
-            return None
-        if decision == "STEP_UP_LIGHT":
-            return "otp"
-        if medium == "app":
-            return "bvn_liveness"
-        return "security_question"
+            return Decision.STEP_UP
+        return Decision.BLOCK
 
     @staticmethod
     def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -338,8 +318,7 @@ class ScoreService:
         return {
             "transaction_reference": existing.transaction_reference,
             "score": existing.score,
-            "decision": existing.decision,
-            "step_up_method": existing.step_up_method,
+            "decision": Decision(existing.decision),
             "reasons": existing.reasons,
         }
 
@@ -384,8 +363,7 @@ class ScoreService:
             transaction_reference=transaction["transaction_reference"],
             customer_id=transaction["customer_id"],
             score=result["score"],
-            decision=result["decision"],
-            step_up_method=result["step_up_method"],
+            decision=result["decision"].value,
             reasons=result["reasons"],
         )
 
@@ -405,6 +383,5 @@ class ScoreService:
             "transaction_reference": transaction["transaction_reference"],
             "score": result["score"],
             "decision": result["decision"],
-            "step_up_method": result["step_up_method"],
             "reasons": result["reasons"],
         }

@@ -39,7 +39,7 @@ class CustomerProfileService:
         Resolves a transaction's category and builds its destination key.
 
         Args: 
-            transaction_type: TransactionType value (e.g., 'TRANSFER', 'AIRTIME', 'DATA', 'ELECTRICITY').
+            transaction_type: TransactionType value (e.g., 'transfer', 'airtime', 'data', 'electricity').
             provider: Provider identifier for the category (e.g., bank code for transfers, telecom network for data/airtime, DISCO for electricity, platform for betting). 
             recipient: Recipient identifier (e.g., NUBAN account number, phone number, meter number). 
             

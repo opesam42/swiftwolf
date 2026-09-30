@@ -4,8 +4,9 @@ from pydantic import Field
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(CURRENT_DIR)
+ENV_DIR = os.path.dirname(ROOT_DIR)
 
-ENV_FILE_PATH = os.path.join(ROOT_DIR, ".env")
+ENV_FILE_PATH = os.path.join(ENV_DIR, ".env")
 
 class Settings(BaseSettings):
     DATABASE_URL: str

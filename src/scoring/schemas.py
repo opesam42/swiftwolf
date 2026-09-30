@@ -4,6 +4,7 @@ from typing import Literal, Optional
 from datetime import datetime
 
 from src.settlement.models import TransactionType
+from src.scoring.models import Decision
 
 
 class Geolocation(BaseModel):
@@ -12,7 +13,6 @@ class Geolocation(BaseModel):
 
 class SessionData(BaseModel):
     login_to_transfer_seconds: float
-    active_call_detected: bool
     pasted_beneficiary: bool
 
 class ScoreRequest(BaseModel):
@@ -20,7 +20,6 @@ class ScoreRequest(BaseModel):
 
     transaction_reference: str
     customer_id: str
-    new_beneficiary: bool
     # provider: bank code for transfers, telecom network for airtime/data, DISCO for electricity, etc.
     provider: str
     # recipient: NUBAN account number, phone number, meter number, etc.
@@ -37,8 +36,7 @@ class ScoreRequest(BaseModel):
 class ScoreResponse(BaseModel):
     transaction_reference: str
     score: int
-    decision: Literal["PROCEED", "STEP_UP_LIGHT", "STEP_UP_LIVENESS", "BLOCK"]
-    step_up_method: Optional[Literal["bvn_liveness", "security_question", "otp"]] = None
+    decision: Decision
     reasons: list[
         Literal[
             "blacklisted_account",
@@ -48,7 +46,6 @@ class ScoreResponse(BaseModel):
             "amount_deviation",
             "unusual_hour",
             "bot_speed_timing",
-            "active_call",
             "pasted_new_beneficiary",
             "dormant_account_spike",
             "location_deviation_major",
@@ -56,10 +53,3 @@ class ScoreResponse(BaseModel):
             "high_velocity_burst",
         ]
     ] = Field(default_factory=list)
-
-
-
-class SessionData(BaseModel):
-    login_to_transfer_seconds: float
-    active_call_detected: bool
-    pasted_beneficiary: bool

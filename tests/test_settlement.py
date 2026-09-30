@@ -30,9 +30,6 @@ def _score(client, auth_headers, transaction_reference: str, customer_id: str = 
 def _settle_payload(transaction_reference: str, status: str = "SUCCESS") -> dict:
     return {
         "transaction_reference": transaction_reference,
-        "customer_id": "CUST_100",
-        "amount": 500000,
-        "transaction_type": "transfer",
         "settled_at": datetime.now(timezone.utc).isoformat(),
         "status": status,
     }

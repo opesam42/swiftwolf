@@ -1,16 +1,15 @@
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 from src.settlement.models import TransactionStatus, VerificationMethod, VerificationOutcome
 
 
 class SettleRequest(BaseModel):
+    """Only what the bank knows after the payment. Customer, amount, type, channel and
+    destination are read from the transaction SwiftWolf scored, so they can't disagree."""
     model_config = ConfigDict(str_strip_whitespace=True)
 
     transaction_reference: str
-    customer_id: str
-    amount: int = Field(gt=0, strict=True, description="Amount in integer kobo (₦1 = 100 kobo)")
-    transaction_type: str
     settled_at: datetime
     status: Literal["SUCCESS", "FAILED"] = "SUCCESS"
 

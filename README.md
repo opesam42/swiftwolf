@@ -169,18 +169,22 @@ uvicorn src.main:app --reload
 
 ## 🔌 API Reference
 
+Bank developers integrating SwiftWolf: see the full integration guide in [`docs/integration-guide.md`](docs/integration-guide.md). The interactive schema reference is served at `/docs` on a running instance.
+
+**Auth:** every request on every endpoint requires an `X-SwiftWolf-Key` header.
+
 ### `POST /v1/score`
 
-Called synchronously, before the bank app calls NIBSS.
+Called before the bank app sends the payment to NIBSS. `amount` is in **integer kobo** (₦200,000 → `20000000`). `provider` and `recipient` identify the destination: bank code and NUBAN for transfers, network and phone number for airtime/data, DISCO and meter number for electricity. `transaction_type` is one of `transfer`, `airtime`, `data`, `electricity`, `cable_tv`, `betting`; `medium` is `app` or `ussd`. `geolocation`, `session` and `last_transaction_timestamp` are optional, but each one enables extra signals.
 
 **Request:**
 ```json
 {
   "transaction_reference": "txn_ref_a1b2c3",
   "customer_id": "cust_123",
-  "beneficiary_account": "0123456789",
-  "beneficiary_bank_code": "000013",
-  "amount": 200000.00,
+  "provider": "000013",
+  "recipient": "0123456789",
+  "amount": 20000000,
   "timestamp": "2026-07-11T02:17:00Z",
   "last_transaction_timestamp": "2026-07-10T02:17:00Z",
   "transaction_type": "transfer",
@@ -193,38 +197,47 @@ Called synchronously, before the bank app calls NIBSS.
 }
 ```
 
-**Response:**
+**Response** (for a first-time customer, so the recipient and bank are both new):
 ```json
 {
   "transaction_reference": "txn_ref_a1b2c3",
-  "score": 135,
-  "decision": "BLOCK",
+  "score": 95,
+  "decision": "STEP_UP",
   "reasons": ["new_beneficiary", "new_bank", "bot_speed_timing", "pasted_new_beneficiary"]
 }
 ```
 
-`decision` is one of `PROCEED`, `STEP_UP` or `BLOCK`. On `STEP_UP`, SwiftWolf does not pick the verification method — the bank app chooses it for its channel (e.g. OTP, BVN liveness in the app, a security question on USSD).
+`decision` is one of `PROCEED`, `STEP_UP` or `BLOCK`. On `STEP_UP`, SwiftWolf does not pick the verification method — the bank app chooses it for its channel (e.g. OTP, BVN liveness in the app, a security question on USSD). Scoring is idempotent per `transaction_reference`: repeating a reference returns the first decision.
 
 ### `POST /v1/transactions/settle`
 
-Fire-and-forget, called after NIBSS confirms settlement and any step-up finishes.
+Called once the payment's outcome is final (NIBSS confirmed or it failed), after any step-up. Only references SwiftWolf has scored are accepted (unknown ones get `404`); customer, amount and destination are taken from the scored transaction, so they aren't sent again.
 
+**Request:**
 ```json
 {
   "transaction_reference": "txn_ref_a1b2c3",
-  "customer_id": "cust_123",
-  "final_status": "completed",
-  "verification_outcome": "passed",
-  "amount": 200000.00,
-  "beneficiary_account": "0123456789",
-  "timestamp": "2026-07-11T02:19:00Z",
-  "nibss_reference": "nip_ref_889271"
+  "settled_at": "2026-07-11T02:19:00Z",
+  "status": "SUCCESS",
+  "verification_method": "liveness",
+  "verification_outcome": "passed"
 }
 ```
 
-Returns immediately with `{ "status": "accepted" }` (or `"already_processed"` on a retry) — the actual behavioral update runs afterward, in the background.
+- `status`: `SUCCESS` (money moved; the customer's baseline learns from it) or `FAILED` (recorded, baseline untouched). Defaults to `SUCCESS`.
+- `verification_method` (`otp`, `liveness`, `kba`) and `verification_outcome` (`passed`, `failed`, `abandoned`): what the bank's step-up did. Send both or neither; omit both when no step-up happened.
 
-**Auth:** every request on every endpoint requires an `X-SwiftWolf-Key` header.
+**Response:**
+```json
+{
+  "transaction_reference": "txn_ref_a1b2c3",
+  "status": "STEP_UP_REQUIRED",
+  "is_settled": true,
+  "message": "Transaction successfully settled."
+}
+```
+
+`status` is the transaction's scoring status (`APPROVED`, `STEP_UP_REQUIRED`, `BLOCKED`, or `FAILED` for a failed settlement). Retrying a settle is safe: an already-settled reference returns `"Transaction was previously settled."` without updating anything.
 
 ---
 

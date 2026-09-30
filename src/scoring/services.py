@@ -9,7 +9,7 @@ from redis.exceptions import RedisError
 from src.core.config import settings
 from src.core.redis import RedisDep
 
-from src.scoring.models import Decision, RiskEvent
+from src.scoring.models import Decision, RiskEvent, RiskReason
 from src.settlement.models import Transaction, TransactionStatus, TransactionType
 from src.blacklist.services import BlacklistService
 from src.profile.services import CustomerProfileService
@@ -160,15 +160,15 @@ class RuleEngine:
                 return {
                     "score": 999,
                     "decision": Decision.BLOCK,
-                    "reasons": ["blacklisted_account"],
+                    "reasons": [RiskReason.BLACKLISTED_ACCOUNT],
                 }
 
         score = 0
-        reasons: list[str] = []
+        reasons: list[RiskReason] = []
 
         if baseline.get("risk_tier") == "elevated":
             score += 15
-            reasons.append("elevated_risk_tier")
+            reasons.append(RiskReason.ELEVATED_RISK_TIER)
 
         destination_key = CustomerProfileService.destination_key_for(
             transaction["transaction_type"], transaction["provider"], transaction["recipient"]
@@ -177,11 +177,11 @@ class RuleEngine:
 
         if is_new_destination:
             score += 30
-            reasons.append("new_beneficiary")
+            reasons.append(RiskReason.NEW_BENEFICIARY)
 
         if is_transfer and transaction["provider"] not in baseline.get("known_bank_codes", []):
             score += 15
-            reasons.append("new_bank")
+            reasons.append(RiskReason.NEW_BANK)
 
         # SCORE FOR AMOUNT DEVIATION
         cat_baseline = baseline.get("category_baselines", {}).get(transaction["transaction_type"])
@@ -192,32 +192,32 @@ class RuleEngine:
             amount_score = self._calculate_continuous_score(z_score)
             if amount_score > 0:
                 score += amount_score
-                reasons.append("amount_deviation")
+                reasons.append(RiskReason.AMOUNT_DEVIATION)
 
         # check for transaction velocity spike
         if velocity_result and velocity_result.is_velocity_anomaly:
             score += velocity_result.velocity_risk_points
-            reasons.append("high_velocity_burst") 
+            reasons.append(RiskReason.HIGH_VELOCITY_BURST) 
 
         # TODO - would be rewrrtien to fit the histogram stuff
         # hour = transaction["timestamp"].hour
         # if baseline.get("typical_hours") and hour not in baseline["typical_hours"]:
         #     score += 15
-        #     reasons.append("unusual_hour")
+        #     reasons.append(RiskReason.UNUSUAL_HOUR)
 
         session = transaction.get("session")
         if session:
             if session.get("login_to_transfer_seconds", 999) < 2:
                 score += 40
-                reasons.append("bot_speed_timing")
+                reasons.append(RiskReason.BOT_SPEED_TIMING)
             if session.get("pasted_beneficiary") and is_new_destination:
                 score += 10
-                reasons.append("pasted_new_beneficiary")
+                reasons.append(RiskReason.PASTED_NEW_BENEFICIARY)
 
-        if baseline.get("is_cold_start") and "amount_deviation" in reasons:
+        if baseline.get("is_cold_start") and RiskReason.AMOUNT_DEVIATION in reasons:
             score -= 10
 
-        if transaction.get("last_transaction_timestamp") and "amount_deviation" in reasons:
+        if transaction.get("last_transaction_timestamp") and RiskReason.AMOUNT_DEVIATION in reasons:
             last_ts = transaction["last_transaction_timestamp"]
             if isinstance(last_ts, str):
                 last_ts = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
@@ -228,7 +228,7 @@ class RuleEngine:
                 current_ts = current_ts.replace(tzinfo=None)
             if (current_ts - last_ts).days > 30:
                 score += 20
-                reasons.append("dormant_account_spike")
+                reasons.append(RiskReason.DORMANT_ACCOUNT_SPIKE)
 
         geolocation = transaction.get("geolocation")
         if geolocation:
@@ -240,10 +240,10 @@ class RuleEngine:
                 if dist is not None:
                     if dist > 500:
                         score += 20
-                        reasons.append("location_deviation_major")
+                        reasons.append(RiskReason.LOCATION_DEVIATION_MAJOR)
                     elif dist > 50:
                         score += 10
-                        reasons.append("location_deviation_minor")
+                        reasons.append(RiskReason.LOCATION_DEVIATION_MINOR)
 
         return {
             "score": score,
@@ -364,7 +364,7 @@ class ScoreService:
             customer_id=transaction["customer_id"],
             score=result["score"],
             decision=result["decision"].value,
-            reasons=result["reasons"],
+            reasons=[reason.value for reason in result["reasons"]],
         )
 
         try:

@@ -26,7 +26,25 @@ class TransactionType(str, Enum):
     ELECTRICITY = "electricity"
     CABLE_TV = "cable_tv"
     BETTING = "betting"
-    
+
+class TransactionChannel(str, Enum):
+    """The banking channel the customer paid through (the `medium` field)."""
+    APP = "app"
+    USSD = "ussd"
+
+class VerificationMethod(str, Enum):
+    """Which step-up check the bank used — reported back at settlement as a fact.
+    SwiftWolf never chooses this; it only records what the bank did."""
+    OTP = "otp"
+    LIVENESS = "liveness"
+    KBA = "kba"  # dynamic knowledge-based questions, used on USSD
+
+class VerificationOutcome(str, Enum):
+    """How the bank's step-up check ended."""
+    PASSED = "passed"
+    FAILED = "failed"        # the customer attempted the check and failed it
+    ABANDONED = "abandoned"  # the customer dropped out without completing it
+
 
 class Transaction(SQLModel, table=True):
     __tablename__ = "transactions"
@@ -60,6 +78,11 @@ class Transaction(SQLModel, table=True):
 
     geolocation_lat: Optional[float] = Field(default=None)
     geolocation_lng: Optional[float] = Field(default=None)
+
+    # Reported by the bank at settlement; both NULL when no step-up happened (PROCEED).
+    # Kept for dispute audits, calibrating which checks catch fraud, and classifier training.
+    verification_method: Optional[str] = Field(default=None, max_length=20)   # a VerificationMethod value
+    verification_outcome: Optional[str] = Field(default=None, max_length=20)  # a VerificationOutcome value
 
     # Entity Relationships
     customer: Optional["Customer"] = Relationship(back_populates="transactions")

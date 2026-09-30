@@ -1,10 +1,10 @@
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing import Literal, Optional
+from typing import Optional
 from datetime import datetime
 
-from src.settlement.models import TransactionType
-from src.scoring.models import Decision
+from src.settlement.models import TransactionChannel, TransactionType
+from src.scoring.models import Decision, RiskReason
 
 
 class Geolocation(BaseModel):
@@ -28,7 +28,7 @@ class ScoreRequest(BaseModel):
     timestamp: datetime
     last_transaction_timestamp: Optional[datetime] = None  # that catches dormant account
     transaction_type: TransactionType
-    medium: Literal["app", "ussd", "atm_withdrawal", "online_payment"]
+    medium: TransactionChannel
     geolocation: Optional[Geolocation] = None
     session: Optional[SessionData] = None
 
@@ -37,19 +37,4 @@ class ScoreResponse(BaseModel):
     transaction_reference: str
     score: int
     decision: Decision
-    reasons: list[
-        Literal[
-            "blacklisted_account",
-            "elevated_risk_tier",
-            "new_beneficiary",
-            "new_bank",
-            "amount_deviation",
-            "unusual_hour",
-            "bot_speed_timing",
-            "pasted_new_beneficiary",
-            "dormant_account_spike",
-            "location_deviation_major",
-            "location_deviation_minor",
-            "high_velocity_burst",
-        ]
-    ] = Field(default_factory=list)
+    reasons: list[RiskReason] = Field(default_factory=list)

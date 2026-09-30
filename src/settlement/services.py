@@ -4,7 +4,7 @@ from fastapi import BackgroundTasks
 from sqlmodel import Session
 
 from src.profile.services import CustomerProfileService
-from src.settlement.models import TransactionStatus
+from src.settlement.models import TransactionStatus, VerificationMethod, VerificationOutcome
 from src.settlement.repository import TransactionRepository
 from src.core.errors import TransactionNotFoundError, InvalidSettlementData
 
@@ -38,6 +38,11 @@ class SettleService:
                 "is_settled": True,
                 "message": "Transaction was previously settled.",
             }
+
+        # Record what the bank's step-up did (both None when no step-up happened).
+        # Saved on SUCCESS and FAILED alike — a failed payment after a failed check is
+        # exactly what a dispute audit needs.
+        self._record_verification(txn, payload)
 
         # Money never moved — record the failure but leave the baseline untouched
         if payload.get("status") == "FAILED":
@@ -80,3 +85,26 @@ class SettleService:
             "is_settled": True,
             "message": "Transaction successfully settled."
         }
+
+    @staticmethod
+    def _record_verification(txn, payload: dict) -> None:
+        method = payload.get("verification_method")
+        outcome = payload.get("verification_outcome")
+        if method is None:
+            return  # no step-up happened (PROCEED); the schema guarantees outcome is None too
+
+        txn.verification_method = VerificationMethod(method).value
+        txn.verification_outcome = VerificationOutcome(outcome).value
+
+        if txn.verification_outcome != VerificationOutcome.PASSED.value and payload.get("status") == "SUCCESS":
+            # Money moved even though the check didn't pass — a bank-side inconsistency.
+            # Record it as reported rather than reject it, but make it visible.
+            logger.warning(
+                f"{txn.transaction_reference}: settled SUCCESS despite "
+                f"{txn.verification_method} verification {txn.verification_outcome}"
+            )
+
+        # TODO: escalate on a failed check — when outcome is FAILED, set the customer's
+        # risk_tier to "elevated" (+15 on every future score). The cache_sync hook will clear
+        # their cached baseline on commit. Needs a way to de-escalate back to "standard"
+        # first, and real data on how often honest customers fail each method.

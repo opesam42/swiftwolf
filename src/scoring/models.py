@@ -16,6 +16,22 @@ class Decision(str, Enum):
     STEP_UP = "STEP_UP"
     BLOCK = "BLOCK"
 
+class RiskReason(str, Enum):
+    """Why a transaction scored the way it did. Values are what the API returns
+    and what RiskEvent.reasons stores."""
+    BLACKLISTED_ACCOUNT = "blacklisted_account"
+    ELEVATED_RISK_TIER = "elevated_risk_tier"
+    NEW_BENEFICIARY = "new_beneficiary"
+    NEW_BANK = "new_bank"
+    AMOUNT_DEVIATION = "amount_deviation"
+    UNUSUAL_HOUR = "unusual_hour"  # rule currently disabled; kept so re-enabling it isn't an API change
+    BOT_SPEED_TIMING = "bot_speed_timing"
+    PASTED_NEW_BENEFICIARY = "pasted_new_beneficiary"
+    DORMANT_ACCOUNT_SPIKE = "dormant_account_spike"
+    LOCATION_DEVIATION_MAJOR = "location_deviation_major"
+    LOCATION_DEVIATION_MINOR = "location_deviation_minor"
+    HIGH_VELOCITY_BURST = "high_velocity_burst"
+
 class RiskEvent(SQLModel, table=True):
     __tablename__ = "risk_events"
 

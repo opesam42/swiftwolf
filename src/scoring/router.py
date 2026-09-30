@@ -25,7 +25,7 @@ async def score_transaction_endpoint(
         "timestamp": request.timestamp,
         "last_transaction_timestamp": request.last_transaction_timestamp,
         "transaction_type": request.transaction_type.value,
-        "medium": request.medium,
+        "medium": request.medium.value,
         "geolocation": request.geolocation.model_dump() if request.geolocation else None,
         "session": request.session.model_dump() if request.session else None,
     }

@@ -217,7 +217,6 @@ Fire-and-forget, called after NIBSS confirms settlement and any step-up finishes
   "verification_outcome": "passed",
   "amount": 200000.00,
   "beneficiary_account": "0123456789",
-  "medium": "app",
   "timestamp": "2026-07-11T02:19:00Z",
   "nibss_reference": "nip_ref_889271"
 }

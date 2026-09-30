@@ -1,24 +1,20 @@
 import os
 
 # Placeholder DSN so `Settings` can be constructed at import time. The real
-# connection string is only known once PGlite has booted, at which point the
-# `pglite_engine` fixture rebinds every module-level engine reference below.
+# connection string is only known once pgserver has booted, at which point the
+# `pg_engine` fixture rebinds every module-level engine reference below.
 os.environ.setdefault(
     "DATABASE_URL", "postgresql+psycopg2://postgres:postgres@localhost:5432/postgres"
 )
 os.environ.setdefault("SWIFTWOLF_API_KEY", "test-secret-key")
 os.environ.setdefault("ADMIN_API_KEY", "test-admin-key")
 
-from pathlib import Path
-
 import fakeredis
+import pgserver
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
+from sqlalchemy import create_engine, text
 from sqlmodel import Session, SQLModel
-
-from py_pglite import PGliteConfig
-from py_pglite.sqlalchemy import SQLAlchemyPGliteManager
 
 import src.core.database as core_database
 import src.main as main_module
@@ -28,42 +24,23 @@ from src.core.redis import get_redis_client
 from src.main import app
 from src.profile.models import Customer
 
-# PGlite ships as an npm package. Pinning a persistent work directory (instead
-# of a fresh temp dir per run) means `npm install` happens once on the first
-# run and every later run reuses the cached node_modules.
-PGLITE_WORK_DIR = Path(__file__).resolve().parent.parent / ".pglite"
-
-
 @pytest.fixture(scope="session")
-def pglite_engine():
-    """Boots one real PostgreSQL instance (PGlite) for the whole test session.
+def pg_engine(tmp_path_factory):
+    """Boots one real PostgreSQL server (pgserver) for the whole test session.
 
-    Tests run against actual Postgres semantics — BIGSERIAL identities, JSONB,
-    partial unique indexes, timezone-aware timestamps — instead of SQLite
-    approximations, so the schema exercised here matches production.
+    pgserver runs the native Postgres binaries shipped in its pip wheel — no
+    Docker, no system install. Tests get actual Postgres semantics (BIGSERIAL
+    identities, JSON columns, partial unique indexes, SELECT ... FOR UPDATE,
+    timezone-aware timestamps) and, unlike the old PGlite setup, any number of
+    concurrent connections.
+
+    The data directory is a fresh temp dir per session, so every run starts
+    from an empty cluster; cleanup_mode="stop" shuts the server down at exit.
     """
-    config = PGliteConfig(work_dir=PGLITE_WORK_DIR)
-
-    # py-pglite bakes the socket path into pglite_manager.js and only writes
-    # that file when it is missing. Because the work directory persists, a
-    # stale script would point at the previous run's socket and startup would
-    # time out waiting for a socket nothing ever creates.
-    stale_launcher = PGLITE_WORK_DIR / "pglite_manager.js"
-    if stale_launcher.exists():
-        stale_launcher.unlink()
-
-    manager = SQLAlchemyPGliteManager(config)
-    manager.start()
-
-    # Build the engine before the readiness probe. py-pglite caches one shared
-    # engine (PGlite serves a single connection at a time) and wait_for_ready()
-    # would otherwise create it with its psycopg3 default; psycopg2 is the
-    # driver this project already pins.
-    engine = manager.get_engine(driver="psycopg2")
-
-    if not manager.wait_for_ready():
-        manager.stop()
-        raise RuntimeError("PGlite failed to become ready")
+    server = pgserver.get_server(tmp_path_factory.mktemp("pgdata"), cleanup_mode="stop")
+    # get_uri() is a libpq URI over a Unix socket; point SQLAlchemy at psycopg2,
+    # the driver this project already pins.
+    engine = create_engine(server.get_uri().replace("postgresql://", "postgresql+psycopg2://", 1))
 
     # Rebind every module-level engine reference. `src.main` imported `engine`
     # by value, so patching only `src.core.database.engine` would leave the
@@ -80,12 +57,13 @@ def pglite_engine():
     finally:
         core_database.engine = original_db_engine
         main_module.engine = original_main_engine
-        manager.stop()
+        engine.dispose()
+        server.cleanup()
 
 
 @pytest.fixture(name="db_session")
-def db_session_fixture(pglite_engine):
-    """Gives each test a clean schema, then a session bound to PGlite.
+def db_session_fixture(pg_engine):
+    """Gives each test a clean schema, then a session bound to the test server.
 
     Truncating up front (rather than after) keeps the database inspectable when
     a test fails, and RESTART IDENTITY means autoincrement ids are predictable
@@ -95,10 +73,10 @@ def db_session_fixture(pglite_engine):
         f'"{table.name}"' for table in SQLModel.metadata.sorted_tables
     )
     if table_names:
-        with pglite_engine.begin() as conn:
+        with pg_engine.begin() as conn:
             conn.execute(text(f"TRUNCATE TABLE {table_names} RESTART IDENTITY CASCADE"))
 
-    with Session(pglite_engine) as session:
+    with Session(pg_engine) as session:
         yield session
 
 

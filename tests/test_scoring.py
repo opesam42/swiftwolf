@@ -4,11 +4,12 @@ from unittest.mock import MagicMock
 
 import pytest
 import redis
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from src.blacklist.models import BlacklistedAccount
 from src.blacklist.services import BlacklistService
 from src.core.config import settings
+from src.scoring.models import RiskEvent
 from src.scoring.services import RuleEngine, VelocityWindow
 
 
@@ -34,6 +35,37 @@ def test_score_clean_transaction_proceeds(client, auth_headers):
     # so it may be challenged — but a clean transaction is never blocked
     assert data["decision"] in ["PROCEED", "STEP_UP"]
     assert "blacklisted_account" not in data["reasons"]
+
+
+def test_score_persists_behavioural_biometrics(client, auth_headers, db_session: Session):
+    """The optional biometrics payload reaches the risk-event telemetry column."""
+    telemetry = {
+        "dwell_time_ms": 120.5,
+        "flight_time_ms": 85.0,
+        "time_to_first_keystroke_ms": 340.0,
+        "backspace_count": 2.0,
+    }
+    payload = {
+        "transaction_reference": "TXN_BIOMETRICS_001",
+        "customer_id": "CUST_BIOMETRICS",
+        "recipient": "1234567890",
+        "provider": "058",
+        "amount": 500000,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "transaction_type": "transfer",
+        "medium": "app",
+        "behavioural_biometrics": telemetry,
+    }
+
+    response = client.post("/v1/score", json=payload, headers=auth_headers)
+
+    assert response.status_code == 200
+    risk_event = db_session.exec(
+        select(RiskEvent).where(
+            RiskEvent.transaction_reference == "TXN_BIOMETRICS_001"
+        )
+    ).one()
+    assert risk_event.telemetry == telemetry
 
 
 def test_score_blacklisted_account_blocks(client, auth_headers, db_session: Session, fake_redis):

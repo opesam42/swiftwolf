@@ -6,7 +6,10 @@ from sqlalchemy import pool
 from alembic import context
 
 from src.core.config import settings
-from src.core import models  # noqa: F401 — registers every table with SQLModel.metadata
+from src.blacklist.models import BlacklistedAccount  # noqa: F401
+from src.scoring.models import RiskEvent  # noqa: F401
+from src.settlement.models import Transaction  # noqa: F401
+from src.profile.models import Customer  # noqa: F401
 from sqlmodel import SQLModel
 
 

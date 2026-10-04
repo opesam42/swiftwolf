@@ -90,6 +90,12 @@ Keep the key on your backend. Don't ship it inside a mobile app.
   "session": {
     "login_to_transfer_seconds": 14.2,
     "pasted_beneficiary": false
+  },
+  "behavioural_biometrics": {
+    "dwell_time_ms": 120.5,
+    "flight_time_ms": 85.0,
+    "time_to_first_keystroke_ms": 340.0,
+    "backspace_count": 2
   }
 }
 ```
@@ -129,8 +135,11 @@ These are optional, but each one lets SwiftWolf check for more kinds of fraud. W
 | `geolocation` | `{ "lat": <number>, "lng": <number> }` of the device, if you have it | Spotting payments from far outside where the customer usually banks |
 | `session.login_to_transfer_seconds` | Seconds between the customer logging in and confirming this payment | Spotting automated attacks that act faster than a person could |
 | `session.pasted_beneficiary` | `true` if the account number was pasted rather than typed or picked | Spotting a common scam pattern when paying someone new |
+| `behavioural_biometrics` | An object containing `dwell_time_ms`, `flight_time_ms`, `time_to_first_keystroke_ms`, and `backspace_count` | Records behavioural telemetry alongside the risk event for analysis |
 
 If you send `session`, include **both** of its fields.
+
+`behavioural_biometrics` is optional. If you provide it, include all four fields. Durations are in milliseconds; `backspace_count` is the number of backspaces. SwiftWolf records these values as telemetry; they do **not currently affect the score or decision**. Do not send raw keystrokes.
 
 ### Response
 
@@ -365,7 +374,7 @@ Stop the payment and don't offer a step-up. Settle it as `FAILED`, with no verif
 - [ ] Use a unique `transaction_reference` per payment attempt, and the same one for its settle call.
 - [ ] Send amounts in whole kobo.
 - [ ] Keep `customer_id`, `provider` and `recipient` formats consistent across payments.
-- [ ] Send the optional fields you have: `geolocation`, `session`, `last_transaction_timestamp`.
+- [ ] Send the optional fields you have: `geolocation`, `session`, `last_transaction_timestamp`, `behavioural_biometrics`.
 - [ ] Act on `decision`, not `score`.
 - [ ] Never offer a step-up on a `blacklisted_account` block.
 - [ ] Settle **every** scored payment, `SUCCESS` or `FAILED`, including `PROCEED` ones.

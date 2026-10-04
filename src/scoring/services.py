@@ -5,6 +5,7 @@ from typing import Any
 from dataclasses import dataclass
 from sqlmodel import Session, select
 from sqlalchemy.exc import IntegrityError
+from pydantic import BaseModel
 from redis.exceptions import RedisError
 from src.core.config import settings
 from src.core.redis import RedisDep
@@ -359,12 +360,22 @@ class ScoreService:
             geolocation_lat=geolocation["lat"] if geolocation else None,
             geolocation_lng=geolocation["lng"] if geolocation else None,
         )
+
+        # extract biometric if present 
+        biometrics = transaction.get("behavioural_biometrics")
+        # convert biometric from pydantic model to dict
+        if isinstance(biometrics, BaseModel):
+            telemetry_payload = biometrics.model_dump()
+        else:
+            telemetry_payload = biometrics  # already a dict 
+
         risk_event = RiskEvent(
             transaction_reference=transaction["transaction_reference"],
             customer_id=transaction["customer_id"],
             score=result["score"],
             decision=result["decision"].value,
             reasons=[reason.value for reason in result["reasons"]],
+            telemetry=telemetry_payload,
         )
 
         try:

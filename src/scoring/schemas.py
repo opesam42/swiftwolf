@@ -1,4 +1,3 @@
-
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional
 from datetime import datetime
@@ -14,6 +13,12 @@ class Geolocation(BaseModel):
 class SessionData(BaseModel):
     login_to_transfer_seconds: float
     pasted_beneficiary: bool
+
+class BehaviouralBiometrics(BaseModel):
+    dwell_time_ms: float
+    flight_time_ms: float
+    time_to_first_keystroke_ms: float
+    backspace_count: float
 
 class ScoreRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
@@ -33,6 +38,7 @@ class ScoreRequest(BaseModel):
     medium: TransactionChannel
     geolocation: Optional[Geolocation] = None
     session: Optional[SessionData] = None
+    behavioural_biometrics: Optional[BehaviouralBiometrics] = None
 
 
 class ScoreResponse(BaseModel):

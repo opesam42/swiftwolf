@@ -29,6 +29,7 @@ async def score_transaction_endpoint(
         "medium": request.medium.value,
         "geolocation": request.geolocation.model_dump() if request.geolocation else None,
         "session": request.session.model_dump() if request.session else None,
+        "behavioural_biometrics": request.behavioural_biometrics.model_dump() if request.behavioural_biometrics else None,
     }
 
     result = ScoreService(db, redis_client).score(transaction)

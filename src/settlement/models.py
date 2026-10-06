@@ -56,7 +56,7 @@ class Transaction(SQLModel, table=True):
 
     # Integer kobo (₦15,000.50 -> 1500050). Convert to naira float only for statistics.
     amount: int = Field(sa_column=Column(BigInteger, nullable=False))
-    destination_key: str = Field(max_length=100, index=True)
+    destination_key: str = Field(max_length=128, index=True)
     # Bank code for transfers, telecom network for airtime/data, DISCO for electricity, etc.
     provider: str = Field(max_length=30)
     transaction_type: str = Field(max_length=30)

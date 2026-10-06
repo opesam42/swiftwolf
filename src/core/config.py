@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     SWIFTWOLF_API_KEY: str = ""
     REDIS_URL: str = "redis://localhost:6379/1"
 
+    # HMAC KEY FOR HASHING RECEIPIENT ID LIKE BENEFICIARY ACCOUNT NUMBER,
+    SW_HMAC_KEY: str 
+
     # AMOUNT CONTINUOUS SCORE CONFIG
     AMOUNT_SCORE_MAX_SCORE: float = Field(
         default=50,

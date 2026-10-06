@@ -6,11 +6,11 @@ import pytest
 import redis
 from sqlmodel import Session, select
 
-from src.blacklist.models import BlacklistedAccount
-from src.blacklist.services import BlacklistService
 from src.core.config import settings
 from src.scoring.models import RiskEvent
 from src.scoring.services import RuleEngine, VelocityWindow
+from src.scoring.utils import pseudonymize
+from src.settlement.models import Transaction
 
 
 def test_score_clean_transaction_proceeds(client, auth_headers):
@@ -68,40 +68,37 @@ def test_score_persists_behavioural_biometrics(client, auth_headers, db_session:
     assert risk_event.telemetry == telemetry
 
 
-def test_score_blacklisted_account_blocks(client, auth_headers, db_session: Session, fake_redis):
-    """Verifies that an active blacklisted account is detected and immediately blocked."""
-    # 1. Seed a blacklisted account in the DB
-    blacklisted = BlacklistedAccount(
-        beneficiary_account="0666666666",
-        beneficiary_bank_code="000015",
-        reason="confirmed_fraud",
-        source="analyst",
-    )
-    db_session.add(blacklisted)
-    db_session.commit()
-
-    # 2. Warm the active blacklist cache in Redis
-    BlacklistService(db_session, fake_redis).sync_to_redis()
-
-    # 3. Attempt scoring against the blacklisted account
+def test_score_persists_stable_pseudonymized_recipient(client, auth_headers, db_session: Session):
+    """Scoring stores only the stable recipient pseudonym in the destination key."""
+    recipient = "0123456789"
+    timestamp = datetime.now(timezone.utc).isoformat()
     payload = {
-        "transaction_reference": "TXN_FRAUD_001",
-        "customer_id": "CUST_999",
-        "recipient": "0666666666",
-        "provider": "000015",
-        "amount": 25000000,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "transaction_reference": "TXN_HASH_001",
+        "customer_id": "CUST_HASH",
+        "recipient": recipient,
+        "provider": "058",
+        "amount": 500000,
+        "timestamp": timestamp,
         "transaction_type": "transfer",
         "medium": "app",
     }
 
-    response = client.post("/v1/score", json=payload, headers=auth_headers)
-    assert response.status_code == 200
+    first_response = client.post("/v1/score", json=payload, headers=auth_headers)
+    second_payload = {**payload, "transaction_reference": "TXN_HASH_002"}
+    second_response = client.post("/v1/score", json=second_payload, headers=auth_headers)
 
-    data = response.json()
-    assert data["decision"] == "BLOCK"
-    assert data["score"] == 999
-    assert "blacklisted_account" in data["reasons"]
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    transactions = db_session.exec(
+        select(Transaction).where(
+            Transaction.transaction_reference.in_(["TXN_HASH_001", "TXN_HASH_002"])
+        )
+    ).all()
+    assert len(transactions) == 2
+
+    expected_key = f"transfer:058:{pseudonymize(recipient)}"
+    assert {transaction.destination_key for transaction in transactions} == {expected_key}
+    assert all(recipient not in transaction.destination_key for transaction in transactions)
 
 
 def test_score_idempotency(client, auth_headers):

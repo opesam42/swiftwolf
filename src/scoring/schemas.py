@@ -29,7 +29,7 @@ class ScoreRequest(BaseModel):
     # provider: bank code for transfers, telecom network for airtime/data, DISCO for electricity, etc.
     provider: str = Field(min_length=1, max_length=30)
     # recipient: NUBAN account number, phone number, meter number, etc.
-    # 50 keeps destination_key ("{category}:{provider}:{recipient}", varchar(100)) in bounds
+    # The HMAC pseudonym is 67 chars; 50 keeps the composite destination key under varchar(128).
     recipient: str = Field(min_length=1, max_length=50)
     amount: int = Field(gt=0, strict=True, description="Amount in integer kobo (₦1 = 100 kobo), e.g. 1500050 for ₦15,000.50")
     timestamp: datetime

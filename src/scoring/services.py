@@ -16,6 +16,8 @@ from src.blacklist.services import BlacklistService
 from src.profile.services import CustomerProfileService
 from src.profile.repository import CustomerRepository
 
+from src.scoring.utils import pseudonymize
+
 # Every RuleEngine decision maps to the status the Transaction row is saved with
 DECISION_TO_STATUS = {
     Decision.PROCEED: TransactionStatus.APPROVED,
@@ -171,10 +173,19 @@ class RuleEngine:
             score += 15
             reasons.append(RiskReason.ELEVATED_RISK_TIER)
 
-        destination_key = CustomerProfileService.destination_key_for(
+        raw_destination_key = CustomerProfileService.destination_key_for(
             transaction["transaction_type"], transaction["provider"], transaction["recipient"]
         )
-        is_new_destination = destination_key not in baseline.get("known_destinations", [])
+        pseudonymized_destination_key = CustomerProfileService.destination_key_for(
+            transaction["transaction_type"],
+            transaction["provider"],
+            pseudonymize(transaction["recipient"]),
+        )
+        known_destinations = baseline.get("known_destinations", [])
+        is_new_destination = (
+            raw_destination_key not in known_destinations
+            and pseudonymized_destination_key not in known_destinations
+        )
 
         if is_new_destination:
             score += 30
@@ -350,7 +361,9 @@ class ScoreService:
             direction="debit",
             amount=transaction["amount"],
             destination_key=CustomerProfileService.destination_key_for(
-                transaction["transaction_type"], transaction["provider"], transaction["recipient"]
+                transaction["transaction_type"],
+                transaction["provider"],
+                pseudonymize(transaction["recipient"]),
             ),
             provider=transaction["provider"],
             transaction_type=transaction["transaction_type"],

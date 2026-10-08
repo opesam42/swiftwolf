@@ -11,7 +11,15 @@ from src.scoring.services import DECISION_TO_STATUS
 from src.settlement.models import Transaction
 
 
-def _score(client, auth_headers, transaction_reference: str, customer_id: str = "CUST_100") -> dict:
+BIOMETRICS = {
+    "dwell_time_ms": 120.5,
+    "flight_time_ms": 85.0,
+    "time_to_first_keystroke_ms": 340.0,
+    "backspace_count": 2.0,
+}
+
+
+def _score(client, auth_headers, transaction_reference: str, customer_id: str = "CUST_100", biometrics=None) -> dict:
     """Scores a transaction first — settlement only accepts references SwiftWolf has scored."""
     payload = {
         "transaction_reference": transaction_reference,
@@ -23,6 +31,8 @@ def _score(client, auth_headers, transaction_reference: str, customer_id: str = 
         "transaction_type": "transfer",
         "medium": "app",
     }
+    if biometrics is not None:
+        payload["behavioural_biometrics"] = biometrics
     response = client.post("/v1/score", json=payload, headers=auth_headers)
     assert response.status_code == 200
     return response.json()
@@ -219,3 +229,34 @@ def test_settlement_writes_lifetime_and_ewma_amount_stats(db_session, fake_redis
     assert stats.ewma_std > 0
     assert stats.ewma_avg < stats.avg_amount
     assert stats.ewma_avg > 300.0
+
+
+def test_settle_success_learns_typing_clusters(client, auth_headers, db_session):
+    _score(client, auth_headers, "TXN_TYPE_OK", biometrics=BIOMETRICS)
+    response = client.post("/v1/transactions/settle", json=_settle_payload("TXN_TYPE_OK"), headers=auth_headers)
+    assert response.status_code == 200
+
+    db_session.expire_all()
+    customer = db_session.exec(select(Customer).where(Customer.customer_id == "CUST_100")).one()
+    typing = customer.get_typing_baselines()
+    assert typing.sample_count == 1
+    flight = typing.fields["flight_time_ms"]
+    assert len(flight) == 1
+    assert flight[0].ewma_avg == pytest.approx(85.0)
+    assert flight[0].sample_count == 1
+
+
+def test_failed_settle_does_not_learn_typing(client, auth_headers, db_session):
+    _score(client, auth_headers, "TXN_TYPE_FAIL", biometrics=BIOMETRICS)
+    response = client.post(
+        "/v1/transactions/settle",
+        json=_settle_payload("TXN_TYPE_FAIL", status="FAILED"),
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+
+    db_session.expire_all()
+    customer = db_session.exec(select(Customer).where(Customer.customer_id == "CUST_100")).one()
+    typing = customer.get_typing_baselines()
+    assert typing.sample_count == 0
+    assert typing.fields == {}

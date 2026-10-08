@@ -135,11 +135,13 @@ These are optional, but each one lets SwiftWolf check for more kinds of fraud. W
 | `geolocation` | `{ "lat": <number>, "lng": <number> }` of the device, if you have it | Spotting payments from far outside where the customer usually banks |
 | `session.login_to_transfer_seconds` | Seconds between the customer logging in and confirming this payment | Spotting automated attacks that act faster than a person could |
 | `session.pasted_beneficiary` | `true` if the account number was pasted rather than typed or picked | Spotting a common scam pattern when paying someone new |
-| `behavioural_biometrics` | An object containing `dwell_time_ms`, `flight_time_ms`, `time_to_first_keystroke_ms`, and `backspace_count` | Records behavioural telemetry alongside the risk event for analysis |
+| `behavioural_biometrics` | An object containing `dwell_time_ms`, `flight_time_ms`, `time_to_first_keystroke_ms`, and `backspace_count` | Adaptive Cluster Baselines: after ~30 genuine settled samples, a PIN that matches none of the customer's (up to 5) typing styles can add `typing_deviation` |
 
 If you send `session`, include **both** of its fields.
 
-`behavioural_biometrics` is optional. If you provide it, include all four fields. Durations are in milliseconds; `backspace_count` is the number of backspaces. SwiftWolf records these values as telemetry; they do **not currently affect the score or decision**. Do not send raw keystrokes.
+`behavioural_biometrics` is optional. If you provide it, include all four fields. Durations are in milliseconds; `backspace_count` is the number of backspaces. Do not send raw keystrokes.
+
+Until a customer has about 30 genuine settled samples with biometrics, typing does **not** add risk (cold start). After that, SwiftWolf keeps up to five EWMA clusters per field and scores the **nearest** cluster. A live value far from every cluster, with all five slots full, returns `typing_deviation`. Clusters update only on successful settlement, not on `/v1/score`.
 
 ### Response
 

@@ -33,6 +33,21 @@ class CategoryBaselineStats(BaseModel):
         description="Recent-habit EWMA standard deviation (naira). Scoring uses this for the Z-score.",
     )
 
+class TypingCluster(BaseModel):
+    """One habit mode for a single telemetry field (no human labels)."""
+    id: int
+    ewma_avg: float = Field(ge=0.0)
+    ewma_var: float = Field(default=0.0, ge=0.0)
+    ewma_std: float = Field(default=0.0, ge=0.0)
+    sample_count: int = Field(default=0, ge=0)
+
+
+class TypingBaselines(BaseModel):
+    """Adaptive Cluster Baselines for behavioural biometrics, stored on Customer."""
+    sample_count: int = Field(default=0, ge=0, description="Genuine settled samples with telemetry")
+    fields: dict[str, list[TypingCluster]] = Field(default_factory=dict)
+
+
 class HourHistogram(BaseModel):
     hour_to_count: dict[int, int] = Field(default_factory=lambda: {h: 0 for h in range(24)})
 
@@ -92,6 +107,13 @@ class Customer(SQLModel, table=True):
         description="[lat, lng] grid cells (rounded to 1 decimal, ~11km) the customer has "
                     "transacted from; drives the location-deviation signals.",
     )
+    typing_baselines: dict = Field(
+        default_factory=lambda: {"sample_count": 0, "fields": {}},
+        sa_column=Column(SAJSON, nullable=False, server_default=text("'{}'::json")),
+        description="Adaptive Cluster Baselines per biometric field "
+                    "({'sample_count', 'fields': {field: [TypingCluster, ...]}}). "
+                    "Score reads this from the same cached baseline blob as amount EWMA.",
+    )
 
     is_cold_start: bool = Field(
         default=True,
@@ -134,6 +156,15 @@ class Customer(SQLModel, table=True):
         """Writes the histogram back as plain JSON with string hour keys."""
         self.typical_hours = {str(hour): count for hour, count in histogram.hour_to_count.items()}
 
+    def get_typing_baselines(self) -> TypingBaselines:
+        raw = self.typing_baselines or {}
+        if not raw or (not raw.get("fields") and not raw.get("sample_count")):
+            return TypingBaselines()
+        return TypingBaselines.model_validate(raw)
+
+    def set_typing_baselines(self, baselines: TypingBaselines) -> None:
+        self.typing_baselines = baselines.model_dump()
+
     def to_baseline_dict(self) -> dict:
         """Converts database entity into lightweight cacheable dictionary for RuleEngine."""
         return {
@@ -144,5 +175,6 @@ class Customer(SQLModel, table=True):
             "known_bank_codes": self.known_bank_codes or [],
             "typical_hours": dict(self.typical_hours or {}),
             "known_location_cells": [list(c) for c in (self.known_location_cells or [])],
+            "typing_baselines": self.get_typing_baselines().model_dump(),
             "is_cold_start": self.is_cold_start,
         }

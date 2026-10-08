@@ -1,9 +1,10 @@
 import logging
 
 from fastapi import BackgroundTasks
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from src.profile.services import CustomerProfileService
+from src.scoring.models import RiskEvent
 from src.settlement.models import TransactionStatus, VerificationMethod, VerificationOutcome
 from src.settlement.repository import TransactionRepository
 from src.core.errors import TransactionNotFoundError, InvalidSettlementData
@@ -70,6 +71,7 @@ class SettleService:
                 geolocation_lat = txn.geolocation_lat or None,
                 geolocation_lng = txn.geolocation_lng or None,
                 bank_code = txn.provider or None,
+                telemetry = self._telemetry_for(txn_ref),
             )
         except InvalidSettlementData as e:
             logger.warning(f"Invalid settlement data for {txn_ref}: {e}")
@@ -104,7 +106,11 @@ class SettleService:
                 f"{txn.verification_method} verification {txn.verification_outcome}"
             )
 
-        # TODO: escalate on a failed check — when outcome is FAILED, set the customer's
-        # risk_tier to "elevated" (+15 on every future score). The cache_sync hook will clear
-        # their cached baseline on commit. Needs a way to de-escalate back to "standard"
-        # first, and real data on how often honest customers fail each method.
+    def _telemetry_for(self, transaction_reference: str) -> dict | None:
+        """Biometrics were captured at /v1/score and stored on RiskEvent."""
+        risk_event = self.repo.db.exec(
+            select(RiskEvent).where(RiskEvent.transaction_reference == transaction_reference)
+        ).first()
+        if risk_event is None or not risk_event.telemetry:
+            return None
+        return dict(risk_event.telemetry)

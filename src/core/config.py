@@ -61,6 +61,38 @@ class Settings(BaseSettings):
                     "0.05 ≈ 40-transaction memory; warmup uses max(alpha, 1/n).",
     )
 
+    # --- Adaptive Cluster Baselines (typing / behavioural biometrics) ---
+    TYPING_CLUSTER_MAX: int = Field(
+        default=5,
+        ge=1,
+        description="Max EWMA clusters per telemetry field. Slots fill as new styles appear.",
+    )
+    TYPING_COLD_START_SAMPLES: int = Field(
+        default=30,
+        ge=1,
+        description="Genuine settled biometric samples before typing can add risk points.",
+    )
+    TYPING_MATCH_Z: float = Field(
+        default=2.5,
+        gt=0.0,
+        description="Max Z-score against the nearest cluster to count as a match (else spawn/flag).",
+    )
+    TYPING_DEFAULT_STD_MS: float = Field(
+        default=15.0,
+        gt=0.0,
+        description="Stand-in σ (ms) for a brand-new duration cluster while ewma_std is still 0.",
+    )
+    TYPING_DEFAULT_STD_BACKSPACE: float = Field(
+        default=1.0,
+        gt=0.0,
+        description="Stand-in σ for a brand-new backspace_count cluster while ewma_std is still 0.",
+    )
+    TYPING_SCORE_MAX: float = Field(
+        default=30,
+        ge=0.0,
+        description="Cap on typing_deviation risk points (same sigmoid shape as amount).",
+    )
+
     # 4. Feed the absolute path directly to Pydantic
     model_config = SettingsConfigDict(
         env_file=ENV_FILE_PATH, 

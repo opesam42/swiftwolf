@@ -13,6 +13,8 @@ from src.core.redis import RedisDep
 from src.scoring.models import Decision, RiskEvent, RiskReason
 from src.settlement.models import Transaction, TransactionStatus, TransactionType
 from src.blacklist.services import BlacklistService
+from src.profile.clusters import TYPING_FIELDS, min_cluster_z
+from src.profile.models import TypingCluster
 from src.profile.services import CustomerProfileService
 from src.profile.repository import CustomerRepository
 
@@ -148,11 +150,13 @@ class RuleEngine:
         amount_score_max_score: int = settings.AMOUNT_SCORE_MAX_SCORE,
         amount_score_steepness: float = settings.AMOUNT_SCORE_STEEPNESS,
         amount_score_midpoint: int = settings.AMOUNT_SCORE_MIDPOINT,
+        typing_score_max_score: int = settings.TYPING_SCORE_MAX,
     ):
         self.blacklisted_accounts = blacklisted_accounts or set()
         self.amount_score_max_score = amount_score_max_score
         self.amount_score_steepness = amount_score_steepness
         self.amount_score_midpoint = amount_score_midpoint
+        self.typing_score_max_score = typing_score_max_score
 
     def evaluate(
         self, 
@@ -167,6 +171,7 @@ class RuleEngine:
                 "known_bank_codes": [],
                 "category_baselines": {},
                 "typical_hours": {},
+                "typing_baselines": {"sample_count": 0, "fields": {}},
                 "is_cold_start": True,
             }
 
@@ -262,6 +267,11 @@ class RuleEngine:
                 score += 20
                 reasons.append(RiskReason.DORMANT_ACCOUNT_SPIKE)
 
+        typing_score = self._typing_deviation_score(transaction, baseline)
+        if typing_score > 0:
+            score += typing_score
+            reasons.append(RiskReason.TYPING_DEVIATION)
+
         geolocation = transaction.get("geolocation")
         if geolocation:
             lat, lng = geolocation["lat"], geolocation["lng"]
@@ -283,7 +293,47 @@ class RuleEngine:
             "reasons": reasons,
         }
 
-    def _calculate_continuous_score(self, z_score: float) -> int:
+    def _typing_deviation_score(self, transaction: dict, baseline: dict) -> int:
+        """Nearest-cluster Z across biometric fields. Cold start and omitted payload skip."""
+        biometrics = transaction.get("behavioural_biometrics")
+        if not biometrics:
+            return 0
+        if isinstance(biometrics, BaseModel):
+            biometrics = biometrics.model_dump()
+
+        typing = baseline.get("typing_baselines") or {}
+        if int(typing.get("sample_count") or 0) < settings.TYPING_COLD_START_SAMPLES:
+            return 0
+
+        fields = typing.get("fields") or {}
+        k_max = settings.TYPING_CLUSTER_MAX
+        match_z = settings.TYPING_MATCH_Z
+        worst_z = 0.0
+
+        for field in TYPING_FIELDS:
+            if field not in biometrics or biometrics[field] is None:
+                continue
+            raw_clusters = fields.get(field) or []
+            if len(raw_clusters) < k_max:
+                continue
+            clusters = [
+                cluster if isinstance(cluster, TypingCluster) else TypingCluster.model_validate(cluster)
+                for cluster in raw_clusters
+            ]
+            default_std = (
+                settings.TYPING_DEFAULT_STD_BACKSPACE
+                if field == "backspace_count"
+                else settings.TYPING_DEFAULT_STD_MS
+            )
+            min_z = min_cluster_z(clusters, float(biometrics[field]), default_std)
+            if min_z is not None and min_z > match_z:
+                worst_z = max(worst_z, min_z)
+
+        if worst_z <= match_z:
+            return 0
+        return self._calculate_continuous_score(worst_z, max_score=self.typing_score_max_score)
+
+    def _calculate_continuous_score(self, z_score: float, max_score: float | None = None) -> int:
         """ Calculates risk points for unusual transaction amounts using a Sigmoid curve. 
         WHY WE USE THIS (Rationale):
         
@@ -302,9 +352,9 @@ class RuleEngine:
         if z_score <= 1.0:
             return 0 # completely normal transaction
         
-        # using sigmoid function
+        cap = self.amount_score_max_score if max_score is None else max_score
         risk_factor = 1.0 / (1.0 + exp(-self.amount_score_steepness * (z_score - self.amount_score_midpoint)))
-        score = self.amount_score_max_score * risk_factor
+        score = cap * risk_factor
         return int( round(score, 0) )
 
     @staticmethod

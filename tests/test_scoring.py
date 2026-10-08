@@ -233,6 +233,64 @@ def test_amount_deviation_skipped_when_ewma_matches_the_amount():
     assert RiskReason.AMOUNT_DEVIATION not in result["reasons"]
 
 
+def _biometrics(*, flight_time_ms: float = 500.0) -> dict:
+    return {
+        "dwell_time_ms": 120.5,
+        "flight_time_ms": flight_time_ms,
+        "time_to_first_keystroke_ms": 340.0,
+        "backspace_count": 2.0,
+    }
+
+
+def _full_flight_clusters() -> list[dict]:
+    return [
+        {"id": i + 1, "ewma_avg": 80.0 + i * 10, "ewma_var": 25.0, "ewma_std": 5.0, "sample_count": 10}
+        for i in range(5)
+    ]
+
+
+def test_typing_deviation_fires_when_past_cold_start_and_slots_full():
+    engine = RuleEngine()
+    txn = {**_known_transfer(500000), "behavioural_biometrics": _biometrics(flight_time_ms=500.0)}
+    baseline = _known_baseline({"count": 50, "avg_amount": 5000.0, "std_amount": 100.0, "ewma_avg": 5000.0, "ewma_std": 100.0})
+    baseline["typing_baselines"] = {
+        "sample_count": 30,
+        "fields": {"flight_time_ms": _full_flight_clusters()},
+    }
+
+    result = engine.evaluate(txn, baseline)
+
+    assert RiskReason.TYPING_DEVIATION in result["reasons"]
+    assert result["score"] >= 25
+
+
+def test_typing_deviation_skipped_during_cold_start():
+    engine = RuleEngine()
+    txn = {**_known_transfer(500000), "behavioural_biometrics": _biometrics(flight_time_ms=500.0)}
+    baseline = _known_baseline({"count": 50, "avg_amount": 5000.0, "std_amount": 100.0, "ewma_avg": 5000.0, "ewma_std": 100.0})
+    baseline["typing_baselines"] = {
+        "sample_count": 10,
+        "fields": {"flight_time_ms": _full_flight_clusters()},
+    }
+
+    result = engine.evaluate(txn, baseline)
+
+    assert RiskReason.TYPING_DEVIATION not in result["reasons"]
+
+
+def test_typing_deviation_skipped_when_slots_remain():
+    engine = RuleEngine()
+    txn = {**_known_transfer(500000), "behavioural_biometrics": _biometrics(flight_time_ms=500.0)}
+    baseline = _known_baseline({"count": 50, "avg_amount": 5000.0, "std_amount": 100.0, "ewma_avg": 5000.0, "ewma_std": 100.0})
+    baseline["typing_baselines"] = {
+        "sample_count": 30,
+        "fields": {"flight_time_ms": _full_flight_clusters()[:2]},
+    }
+
+    result = engine.evaluate(txn, baseline)
+
+    assert RiskReason.TYPING_DEVIATION not in result["reasons"]
+
 
 # --- Velocity window ---
 

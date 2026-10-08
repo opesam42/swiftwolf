@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
+from src.profile.clusters import TYPING_FIELDS, evaluate_and_update_clusters
 from src.profile.models import Customer, HourHistogram, CategoryBaselineStats
 from src.profile.repository import CustomerRepository
 from src.profile.stats import ewma_update, welford_update
@@ -77,7 +78,8 @@ class CustomerProfileService:
             occurred_at: datetime,
             geolocation_lat: float | None = None, 
             geolocation_lng: float | None = None,
-            bank_code: str | None = None
+            bank_code: str | None = None,
+            telemetry: dict | None = None,
         ) -> None:
         """Updates customer statistics post-settlement.
         Returns the updated Customer, so callers (e.g. SettlementService)
@@ -134,6 +136,9 @@ class CustomerProfileService:
 
         customer.set_category_stats(transaction_type, updated_stats)
 
+        if telemetry:
+            self._apply_typing_telemetry(customer, telemetry)
+
         # Leave cold start once enough settled history exists. The per-category counts
         # already record every settled transaction, so no extra COUNT query is needed,
         # and the flag commits atomically with the baseline it describes.
@@ -146,3 +151,34 @@ class CustomerProfileService:
         self.repo.save(customer)
 
         return customer
+
+    @staticmethod
+    def _default_typing_std(field: str) -> float:
+        if field == "backspace_count":
+            return settings.TYPING_DEFAULT_STD_BACKSPACE
+        return settings.TYPING_DEFAULT_STD_MS
+
+    def _apply_typing_telemetry(self, customer: Customer, telemetry: dict) -> None:
+        """Match / spawn / flag per biometric field on the locked customer row."""
+        baselines = customer.get_typing_baselines()
+        field_clusters = {
+            name: list(clusters) for name, clusters in baselines.fields.items()
+        }
+
+        for field in TYPING_FIELDS:
+            if field not in telemetry or telemetry[field] is None:
+                continue
+            x = float(telemetry[field])
+            updated, _outcome = evaluate_and_update_clusters(
+                field_clusters.get(field, []),
+                x,
+                k_max=settings.TYPING_CLUSTER_MAX,
+                match_z=settings.TYPING_MATCH_Z,
+                alpha=settings.EWMA_ALPHA,
+                default_std=self._default_typing_std(field),
+            )
+            field_clusters[field] = updated
+
+        baselines.sample_count += 1
+        baselines.fields = field_clusters
+        customer.set_typing_baselines(baselines)

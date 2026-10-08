@@ -32,6 +32,7 @@ class RiskReason(str, Enum):
     LOCATION_DEVIATION_MAJOR = "location_deviation_major"
     LOCATION_DEVIATION_MINOR = "location_deviation_minor"
     HIGH_VELOCITY_BURST = "high_velocity_burst"
+    TYPING_DEVIATION = "typing_deviation"
 
 class RiskEvent(SQLModel, table=True):
     __tablename__ = "risk_events"

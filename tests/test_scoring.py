@@ -7,7 +7,8 @@ import redis
 from sqlmodel import Session, select
 
 from src.core.config import settings
-from src.scoring.models import RiskEvent
+from src.profile.services import CustomerProfileService
+from src.scoring.models import RiskEvent, RiskReason
 from src.scoring.services import RuleEngine, VelocityWindow
 from src.scoring.utils import pseudonymize
 from src.settlement.models import Transaction
@@ -155,7 +156,82 @@ def test_continuous_amount_scoring_thresholds():
     assert engine._calculate_continuous_score(z_score=15.0) == 50
 
 
-    from datetime import datetime, timezone
+def _known_transfer(amount_kobo: int) -> dict:
+    return {
+        "transaction_type": "transfer",
+        "provider": "058",
+        "recipient": "1234567890",
+        "amount": amount_kobo,
+        "timestamp": datetime.now(timezone.utc),
+    }
+
+
+def _known_baseline(transfer_stats: dict) -> dict:
+    dest = CustomerProfileService.destination_key_for("transfer", "058", "1234567890")
+    return {
+        "known_destinations": [dest],
+        "known_bank_codes": ["058"],
+        "category_baselines": {"transfer": transfer_stats},
+        "is_cold_start": False,
+    }
+
+
+def test_amount_deviation_uses_ewma_not_lifetime_mean():
+    """A ₦5,000 transfer is typical of the lifetime mean but extreme vs recent habit."""
+    engine = RuleEngine()
+    txn = _known_transfer(amount_kobo=500000)
+    baseline = _known_baseline(
+        {
+            "count": 50,
+            "avg_amount": 5000.0,
+            "std_amount": 100.0,
+            "ewma_avg": 300.0,
+            "ewma_std": 50.0,
+        }
+    )
+
+    result = engine.evaluate(txn, baseline)
+
+    assert RiskReason.AMOUNT_DEVIATION in result["reasons"]
+    assert result["score"] == 50
+
+
+def test_amount_deviation_falls_back_to_lifetime_when_ewma_std_is_zero():
+    """Baselines written before ewma_* still score against Welford."""
+    engine = RuleEngine()
+    txn = _known_transfer(amount_kobo=500000)
+    baseline = _known_baseline(
+        {
+            "count": 50,
+            "avg_amount": 300.0,
+            "std_amount": 50.0,
+        }
+    )
+
+    result = engine.evaluate(txn, baseline)
+
+    assert RiskReason.AMOUNT_DEVIATION in result["reasons"]
+    assert result["score"] == 50
+
+
+def test_amount_deviation_skipped_when_ewma_matches_the_amount():
+    """Lifetime mean is far away; recent EWMA says this amount is normal."""
+    engine = RuleEngine()
+    txn = _known_transfer(amount_kobo=500000)
+    baseline = _known_baseline(
+        {
+            "count": 50,
+            "avg_amount": 300.0,
+            "std_amount": 50.0,
+            "ewma_avg": 5000.0,
+            "ewma_std": 100.0,
+        }
+    )
+
+    result = engine.evaluate(txn, baseline)
+
+    assert RiskReason.AMOUNT_DEVIATION not in result["reasons"]
+
 
 
 # --- Velocity window ---

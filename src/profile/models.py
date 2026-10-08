@@ -17,9 +17,21 @@ def utcnow() -> datetime:
 
 class CategoryBaselineStats(BaseModel): 
     count: int = Field(default=0, ge=0, description="Total settled transaction count")
-    avg_amount: float = Field( default=0.0, ge=0.0, description="Running mean amount" ) 
-    m2: float = Field( default=0.0, ge=0.0, description="Running sum of squared differences" ) 
-    std_amount: float = Field( default=0.0, ge=0.0, description="Running standard deviation" )
+    avg_amount: float = Field( default=0.0, ge=0.0, description="Lifetime Welford mean amount (naira)" ) 
+    m2: float = Field( default=0.0, ge=0.0, description="Lifetime Welford sum of squared differences" ) 
+    std_amount: float = Field( default=0.0, ge=0.0, description="Lifetime Welford sample standard deviation (naira)" )
+    ewma_avg: float = Field(
+        default=0.0, ge=0.0,
+        description="Recent-habit EWMA mean amount (naira). Scoring uses this for the Z-score.",
+    )
+    ewma_var: float = Field(
+        default=0.0, ge=0.0,
+        description="Recent-habit EWMA variance. Kept unrounded for the next update.",
+    )
+    ewma_std: float = Field(
+        default=0.0, ge=0.0,
+        description="Recent-habit EWMA standard deviation (naira). Scoring uses this for the Z-score.",
+    )
 
 class HourHistogram(BaseModel):
     hour_to_count: dict[int, int] = Field(default_factory=lambda: {h: 0 for h in range(24)})
@@ -54,8 +66,10 @@ class Customer(SQLModel, table=True):
     # use the get_/set_ helpers below to work with them as validated Pydantic objects.
     category_baselines: dict[str, dict] = Field(
         default_factory=dict, sa_column=Column(SAJSON, nullable=False),
-        description="Per transaction_type amount stats, as plain CategoryBaselineStats dumps "
-                    "({'count', 'avg_amount', 'm2', 'std_amount'}), used for the amount-deviation Z-score.",
+        description="Per transaction_type amount stats, as plain CategoryBaselineStats dumps. "
+                    "Lifetime Welford lives in avg_amount/m2/std_amount; recent-habit EWMA "
+                    "in ewma_avg/ewma_var/ewma_std. The amount-deviation Z-score reads EWMA, "
+                    "falling back to lifetime when ewma_std is still 0.",
     )
     known_destinations: list[str] = Field(
         default_factory=list, sa_column=Column(SAJSON, nullable=False),

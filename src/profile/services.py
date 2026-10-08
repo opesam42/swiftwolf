@@ -1,9 +1,9 @@
-import math
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from src.profile.models import Customer, HourHistogram, CategoryBaselineStats
 from src.profile.repository import CustomerRepository
+from src.profile.stats import ewma_update, welford_update
 
 from src.settlement.models import TransactionType
 from src.core.config import settings
@@ -112,35 +112,24 @@ class CustomerProfileService:
                 known_location_cells.append(cell)
             customer.known_location_cells = known_location_cells
 
-        # Welford algorithm to calculate exact mean and variance on amount based on the transaction category
+        # Amount baselines: lifetime Welford (global mean) plus recent-habit EWMA.
+        # Amount arrives in integer kobo; both series are kept in naira.
         stats = customer.get_category_stats(transaction_type)
-
-        # amount arrives in integer kobo; baselines are kept in naira so they read naturally
         amount_naira = amount / 100.0
 
-        old_count = stats.count
-        old_avg = stats.avg_amount
-        old_m2 = stats.m2
-
-        new_count = old_count + 1
-        delta = amount_naira - old_avg
-        new_avg = old_avg + (delta / new_count)
-        delta2 = amount_naira - new_avg
-        new_m2 = old_m2 + (delta * delta2)
-
-        # Variance & Std Dev (Sample variance: count - 1)
-        if new_count > 1:
-            variance = (new_m2 / (new_count - 1)) 
-        else:
-            variance = 0.0 
-
-        new_std = math.sqrt(variance)
+        lifetime = welford_update(stats.count, stats.avg_amount, stats.m2, amount_naira)
+        recent = ewma_update(
+            lifetime.count, stats.ewma_avg, stats.ewma_var, amount_naira, settings.EWMA_ALPHA
+        )
 
         updated_stats = CategoryBaselineStats(
-            count = new_count,
-            avg_amount = round(new_avg, 2),
-            m2 = new_m2,
-            std_amount = round(new_std, 2)
+            count=lifetime.count,
+            avg_amount=round(lifetime.avg, 2),
+            m2=lifetime.m2,
+            std_amount=round(lifetime.std, 2),
+            ewma_avg=round(recent.avg, 2),
+            ewma_var=recent.var,
+            ewma_std=round(recent.std, 2),
         )
 
         customer.set_category_stats(transaction_type, updated_stats)

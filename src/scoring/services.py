@@ -122,6 +122,23 @@ class VelocityWindow:
 
 
 
+def _amount_center_and_scale(cat_baseline: dict | None) -> tuple[float, float] | None:
+    """Mean and std (naira) for the amount Z-score.
+
+    Recent-habit EWMA wins when it has a usable spread. Old category JSON
+    without ewma_* falls back to the lifetime Welford pair.
+    """
+    if not cat_baseline:
+        return None
+    ewma_std = float(cat_baseline.get("ewma_std") or 0)
+    if ewma_std > 0:
+        return float(cat_baseline.get("ewma_avg") or 0), ewma_std
+    lifetime_std = float(cat_baseline.get("std_amount") or 0)
+    if lifetime_std > 0:
+        return float(cat_baseline.get("avg_amount") or 0), lifetime_std
+    return None
+
+
 class RuleEngine:
     """Deep module encapsulating Layer 1 rule evaluation heuristics."""
 
@@ -196,11 +213,14 @@ class RuleEngine:
             reasons.append(RiskReason.NEW_BANK)
 
         # SCORE FOR AMOUNT DEVIATION
+        # Prefer recent-habit EWMA; fall back to lifetime Welford for baselines
+        # written before ewma_* existed (ewma_std still 0).
         cat_baseline = baseline.get("category_baselines", {}).get(transaction["transaction_type"])
-        if cat_baseline and cat_baseline.get("std_amount", 0) > 0:
-            # Z_SCORE = | amount - mean | / std_amount; baselines are in naira, the payload is in kobo
+        amount_center = _amount_center_and_scale(cat_baseline)
+        if amount_center is not None:
+            mean_naira, std_naira = amount_center
             amount_naira = transaction["amount"] / 100.0
-            z_score = abs(amount_naira - cat_baseline["avg_amount"]) / cat_baseline["std_amount"]
+            z_score = abs(amount_naira - mean_naira) / std_naira
             amount_score = self._calculate_continuous_score(z_score)
             if amount_score > 0:
                 score += amount_score

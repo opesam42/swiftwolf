@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 
+import pytest
 from sqlmodel import Session, select
 
 from src.core.config import settings
@@ -190,3 +191,31 @@ def test_retried_settle_keeps_first_verification(client, auth_headers, db_sessio
     assert client.post("/v1/transactions/settle", json=retry, headers=auth_headers).status_code == 200
 
     assert _stored_transaction(db_session, "TXN_VERIFY_RETRY").verification_method == "liveness"
+
+
+def test_settlement_writes_lifetime_and_ewma_amount_stats(db_session, fake_redis):
+    """Lifetime mean stays global; EWMA forgets the old ₦5,000 cluster faster."""
+    from src.profile.services import CustomerProfileService
+    from src.settlement.models import TransactionType
+
+    service = CustomerProfileService(db_session, fake_redis)
+    occurred = datetime.now(timezone.utc)
+    amounts_kobo = [500000] * 20 + [30000] * 20
+    for amount in amounts_kobo:
+        service.update_baseline_from_settled_transaction(
+            customer_id="CUST_EWMA",
+            amount=amount,
+            destination_key="transfer:058:abc",
+            transaction_type=TransactionType.TRANSFER,
+            occurred_at=occurred,
+            bank_code="058",
+        )
+
+    stats = service.repo.get("CUST_EWMA").get_category_stats("transfer")
+    assert stats.count == 40
+    # Rounded per-step Welford drifts by a kobo-scale 0.01 vs the batch mean.
+    assert stats.avg_amount == pytest.approx(2650.0, abs=0.02)
+    assert stats.std_amount > 0
+    assert stats.ewma_std > 0
+    assert stats.ewma_avg < stats.avg_amount
+    assert stats.ewma_avg > 300.0

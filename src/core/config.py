@@ -52,6 +52,15 @@ class Settings(BaseSettings):
         description="Settled transactions (across all categories) after which a customer leaves cold start.",
     )
 
+    # --- Recent-habit amount baseline (EWMA) ---
+    EWMA_ALPHA: float = Field(
+        default=0.05,
+        gt=0.0,
+        le=1.0,
+        description="Exponential decay for the recent-habit amount mean/variance. "
+                    "0.05 ≈ 40-transaction memory; warmup uses max(alpha, 1/n).",
+    )
+
     # 4. Feed the absolute path directly to Pydantic
     model_config = SettingsConfigDict(
         env_file=ENV_FILE_PATH, 

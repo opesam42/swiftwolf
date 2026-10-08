@@ -27,7 +27,7 @@ Required columns (header names are case-insensitive):
 | `date` | `YYYY-MM-DD` |
 | `time` | `HH:MM:SS` or `HH:MM` |
 | `amount_kobo` | Positive whole kobo (`300.00` naira → `30000`) |
-| `transaction_id` | Unique reference, max 64 characters |
+| `transaction_id` | Statement reference, max 64 characters. The job stores a per-customer `seed-…` id, so the same file can warm more than one customer. |
 | `recipient` | Phone, NUBAN, meter number, etc. Max 50 characters |
 | `provider` | Network (`MTN`, `GLO`) or bank code (`000012`). Max 30 characters |
 
@@ -85,7 +85,7 @@ python -m src.cli seed-profile \
   --csv jobs/files/raw_stmts/stmt.csv
 ```
 
-One CSV is one customer. `--customer-id` is required because statements do not carry SwiftWolf's id.
+Each run attributes every row to `--customer-id` (statements do not carry SwiftWolf's id). The same file can be run again for a different customer.
 
 ### Flags
 
@@ -108,7 +108,7 @@ Use `--medium app` only when you know every row was actually an app payment.
 
 1. Parses the CSV and sorts **oldest → newest** (Welford and the hour histogram are incremental).
 2. Creates the `customers` row if it does not exist.
-3. Inserts each new `transactions` row with `status=APPROVED`, `medium=statement`, and an HMAC `destination_key` (same helper live scoring uses).
+3. Inserts each new `transactions` row with a per-customer `transaction_reference` (`seed-` plus a 16-char hash of `customer_id:csv_id`), `status=APPROVED`, `medium=statement`, and an HMAC `destination_key` (same helper live scoring uses). The CSV `transaction_id` is not written as-is: it is unique only on PalmPay's statement, not on SwiftWolf's global ledger.
 4. Calls `SettleService` with `SUCCESS` so the baseline updates: known destinations, bank codes, per-category amount stats, typical hours, and `is_cold_start` (off after 10 settled rows).
 5. Prints a report.
 
@@ -118,7 +118,7 @@ It does **not** write `risk_events` and does **not** touch the Redis velocity wi
 
 Safe to run again with the same file:
 
-- Already-settled `transaction_id`s are skipped (`skipped existing`)
+- Already-settled rows for **this** `customer_id` are skipped (`skipped existing`). A second customer can reuse the same CSV.
 - Category counts are not incremented again
 - A row that was inserted but never settled (job died mid-loop) is settled on the next run
 

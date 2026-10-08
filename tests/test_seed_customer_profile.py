@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, select
 
-from jobs.seed_customer_profile import seed_profile
+from jobs.seed_customer_profile import seed_profile, seed_reference
 from jobs.statement_parser import parse_statement_csv
 from jobs.type_mapper import resolve_transaction_type
 from src.core.config import settings
@@ -78,7 +78,11 @@ def test_seed_writes_hmac_destination_key(tmp_path: Path, db_session: Session, f
         redis_client=fake_redis,
     )
 
-    txn = db_session.exec(select(Transaction).where(Transaction.transaction_reference == "SEED_HASH_1")).one()
+    txn = db_session.exec(
+        select(Transaction).where(
+            Transaction.transaction_reference == seed_reference("CUST_SEED_HASH", "SEED_HASH_1")
+        )
+    ).one()
     expected = CustomerProfileService.destination_key_for(
         TransactionType.DATA, "GLO", pseudonymize("09057339147")
     )
@@ -88,6 +92,40 @@ def test_seed_writes_hmac_destination_key(tmp_path: Path, db_session: Session, f
     assert "09057339147" not in txn.destination_key
     assert txn.medium == TransactionChannel.STATEMENT.value
     assert txn.is_settled is True
+
+
+def test_seed_reference_is_stable_per_customer_and_fits_the_column():
+    first = seed_reference("CUST_A", "63bxvksab01")
+    assert first == seed_reference("CUST_A", "63bxvksab01")
+    assert first != seed_reference("CUST_B", "63bxvksab01")
+    assert first.startswith("seed-")
+    assert len(first) == 21
+    assert len(seed_reference("c" * 64, "t" * 64)) == 21
+
+
+def test_same_csv_seeds_two_customers(tmp_path: Path, db_session: Session, fake_redis):
+    path = _write_csv(tmp_path, SNIPPET)
+    first = seed_profile(path, "CUST_SEED_A", db=db_session, redis_client=fake_redis)
+    second = seed_profile(path, "CUST_SEED_B", db=db_session, redis_client=fake_redis)
+
+    assert first.inserted == 9
+    assert first.skipped_existing == 0
+    assert second.inserted == 9
+    assert second.skipped_existing == 0
+    assert second.settled == 9
+
+    refs_a = set(
+        db_session.exec(
+            select(Transaction.transaction_reference).where(Transaction.customer_id == "CUST_SEED_A")
+        ).all()
+    )
+    refs_b = set(
+        db_session.exec(
+            select(Transaction.transaction_reference).where(Transaction.customer_id == "CUST_SEED_B")
+        ).all()
+    )
+    assert len(refs_a) == 9
+    assert refs_a.isdisjoint(refs_b)
 
 
 def test_seed_rerun_does_not_double_count(tmp_path: Path, db_session: Session, fake_redis):

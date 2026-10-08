@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     ADMIN_API_KEY: str = ""
 
     # Browser dashboard login at /admin. Separate from SWIFTWOLF_API_KEY.
-    ADMIN_USERNAME: str = ""
-    ADMIN_PASSWORD: str = ""
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_PASSWORD: str = "admin"
     ADMIN_SESSION_SECRET: str = "" 
 
     # AMOUNT CONTINUOUS SCORE CONFIG

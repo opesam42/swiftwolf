@@ -1,3 +1,4 @@
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,16 @@ class SeedReport:
                 ref = row.transaction_id or "?"
                 lines.append(f"    line {row.source_line} ({ref}): {row.reason}")
         return lines
+
+
+def seed_reference(customer_id: str, csv_transaction_id: str) -> str:
+    """Stable per-(customer, statement row) ledger id. Always under 64 characters.
+
+    The CSV transaction_id is PalmPay's id. SwiftWolf's transaction_reference is
+    global and unique, so the same statement can seed more than one customer.
+    """
+    digest = hashlib.sha256(f"{customer_id}:{csv_transaction_id}".encode()).hexdigest()[:16]
+    return f"seed-{digest}"
 
 
 def seed_profile(
@@ -105,9 +116,10 @@ def _seed_one(
     settle_service: SettleService,
     report: SeedReport,
 ) -> None:
-    existing = txn_repo.get(row.transaction_id)
+    ref = seed_reference(customer_id, row.transaction_id)
+    existing = txn_repo.get(ref)
     if existing is None:
-        txn_repo.save(_build_transaction(row, customer_id))
+        txn_repo.save(_build_transaction(row, customer_id, ref))
         report.inserted += 1
     elif existing.is_settled:
         report.skipped_existing += 1
@@ -115,7 +127,7 @@ def _seed_one(
 
     settle_service.settle(
         {
-            "transaction_reference": row.transaction_id,
+            "transaction_reference": ref,
             "settled_at": row.occurred_at,
             "status": "SUCCESS",
         }
@@ -123,9 +135,9 @@ def _seed_one(
     report.settled += 1
 
 
-def _build_transaction(row: NormalizedRow, customer_id: str) -> Transaction:
+def _build_transaction(row: NormalizedRow, customer_id: str, transaction_reference: str) -> Transaction:
     return Transaction(
-        transaction_reference=row.transaction_id,
+        transaction_reference=transaction_reference,
         customer_id=customer_id,
         direction="debit",
         amount=row.amount_kobo,

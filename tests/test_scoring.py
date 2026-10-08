@@ -32,8 +32,8 @@ def test_score_clean_transaction_proceeds(client, auth_headers):
 
     data = response.json()
     assert data["transaction_reference"] == "TXN_TEST_001"
-    # A first-time customer's first transfer is a new recipient at a new bank (+45),
-    # so it may be challenged — but a clean transaction is never blocked
+    # A first-time customer's first transfer is a new recipient at a new bank (+30),
+    # so it may sit on the PROCEED/STEP_UP line — but a clean transaction is never blocked
     assert data["decision"] in ["PROCEED", "STEP_UP"]
     assert "blacklisted_account" not in data["reasons"]
 

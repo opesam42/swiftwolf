@@ -210,11 +210,11 @@ class RuleEngine:
         )
 
         if is_new_destination:
-            score += 30
+            score += 20
             reasons.append(RiskReason.NEW_BENEFICIARY)
 
         if is_transfer and transaction["provider"] not in baseline.get("known_bank_codes", []):
-            score += 15
+            score += 10
             reasons.append(RiskReason.NEW_BANK)
 
         # SCORE FOR AMOUNT DEVIATION
@@ -245,7 +245,7 @@ class RuleEngine:
         session = transaction.get("session")
         if session:
             if session.get("login_to_transfer_seconds", 999) < 2:
-                score += 40
+                score += 30
                 reasons.append(RiskReason.BOT_SPEED_TIMING)
             if session.get("pasted_beneficiary") and is_new_destination:
                 score += 10

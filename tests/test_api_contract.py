@@ -51,6 +51,17 @@ def test_score_rejects_over_long_fields_with_422(client, auth_headers, field, li
     assert too_long.json()["detail"][0]["loc"] == ["body", field]
 
 
+def test_score_rejects_statement_medium_with_422(client, auth_headers):
+    """statement is seed-job history, not a live bank channel."""
+    response = client.post(
+        "/v1/score",
+        json=_score_payload(medium="statement"),
+        headers=auth_headers,
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "medium"]
+
+
 def test_settle_rejects_over_long_reference_with_422(client, auth_headers):
     response = client.post(
         "/v1/transactions/settle",

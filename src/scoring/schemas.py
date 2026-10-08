@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional
 from datetime import datetime
 
@@ -39,6 +39,13 @@ class ScoreRequest(BaseModel):
     geolocation: Optional[Geolocation] = None
     session: Optional[SessionData] = None
     behavioural_biometrics: Optional[BehaviouralBiometrics] = None
+
+    @field_validator("medium")
+    @classmethod
+    def live_channels_only(cls, value: TransactionChannel) -> TransactionChannel:
+        if value is TransactionChannel.STATEMENT:
+            raise ValueError("medium 'statement' is reserved for historical seed data")
+        return value
 
 
 class ScoreResponse(BaseModel):

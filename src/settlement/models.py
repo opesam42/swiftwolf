@@ -28,9 +28,14 @@ class TransactionType(str, Enum):
     BETTING = "betting"
 
 class TransactionChannel(str, Enum):
-    """The banking channel the customer paid through (the `medium` field)."""
+    """The banking channel the customer paid through (the `medium` field).
+
+    `statement` is only written by the historical seed job. Live /v1/score
+    accepts `app` and `ussd` only.
+    """
     APP = "app"
     USSD = "ussd"
+    STATEMENT = "statement"
 
 class VerificationMethod(str, Enum):
     """Which step-up check the bank used — reported back at settlement as a fact.

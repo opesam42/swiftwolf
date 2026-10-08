@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SwiftWolf · EWMA control band</title>
+  <link rel="stylesheet" href="/admin/static/css/dashboard.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">SwiftWolf</p>
+      <h1>Recent-habit control band</h1>
+    </div>
+    <form class="customer-switch" method="get" action="/admin">
+      <label>
+        Customer
+        <input type="text" name="customer_id" value="{{ customer_id }}" spellcheck="false">
+      </label>
+      <label>
+        Category
+        <select name="category" id="category-select">
+          {% for value, label in categories %}
+          <option value="{{ value }}" {% if value == category %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Load</button>
+    </form>
+    <form method="post" action="/admin/logout">
+      <button type="submit" class="ghost">Sign out</button>
+    </form>
+  </header>
+
+  <section class="stat-row" aria-label="Customer baseline">
+    <article class="stat-card">
+      <p class="stat-label">Reflex latency</p>
+      <p class="stat-value"><span class="pulse" aria-hidden="true"></span><span id="stat-latency">—</span> ms</p>
+    </article>
+    <article class="stat-card">
+      <p class="stat-label">EWMA mean (μ)</p>
+      <p class="stat-value" id="stat-mu">—</p>
+    </article>
+    <article class="stat-card">
+      <p class="stat-label">EWMA std (σ)</p>
+      <p class="stat-value" id="stat-sigma">—</p>
+    </article>
+    <article class="stat-card">
+      <p class="stat-label">Active cluster budget (K)</p>
+      <p class="stat-value"><span id="stat-k">—</span> / <span id="stat-k-max">5</span></p>
+    </article>
+  </section>
+
+  <section class="chart-panel">
+    <div class="chart-head">
+      <h2>EWMA statistical control band</h2>
+      <p>Grey dots are the last 20 settled payments that trained the line. Coloured dots on the right are live app/USSD scores not yet settled.</p>
+    </div>
+    <p id="chart-status" class="chart-status" hidden></p>
+    <div class="chart-wrap">
+      <canvas id="ewma-band" width="960" height="420"></canvas>
+    </div>
+  </section>
+
+  <script>
+    window.SW_CUSTOMER_ID = {{ customer_id | tojson }};
+    window.SW_CATEGORY = {{ category | tojson }};
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+  <script src="/admin/static/js/control-chart.js"></script>
+</body>
+</html>

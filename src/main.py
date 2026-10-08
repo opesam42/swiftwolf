@@ -1,19 +1,25 @@
 from contextlib import asynccontextmanager
 
+from pathlib import Path
+
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session
 
 from src.core.database import db_init, engine
 from src.core.redis import get_redis_client
 
 # Domain Services & Routers
+from src.admin.router import pages_router as admin_pages_router
 from src.admin.router import router as admin_router
 from src.blacklist.services import BlacklistService
 from src.profile.router import router as profile_router
 from src.scoring.router import router as scoring_router
 from src.settlement.router import router as settlement_router
+
+ADMIN_STATIC_DIR = Path(__file__).resolve().parent / "admin" / "static"
 
 
 @asynccontextmanager
@@ -73,6 +79,8 @@ app.include_router(scoring_router, tags=["Real-time Scoring"])
 app.include_router(settlement_router, tags=["Transaction Settlement"])
 app.include_router(profile_router, tags=["Customer Insights & Baselines"])
 app.include_router(admin_router, tags=["Internal Administration"])
+app.include_router(admin_pages_router, tags=["Admin Dashboard"])
+app.mount("/admin/static", StaticFiles(directory=str(ADMIN_STATIC_DIR)), name="admin-static")
 
 
 # Health Check: ping the base URL. No auth, no dependencies — a 200 means the process is up.

@@ -13,6 +13,9 @@ os.environ.setdefault(
 os.environ["REDIS_URL"] = "redis://127.0.0.1:1/0"
 os.environ.setdefault("SWIFTWOLF_API_KEY", "test-secret-key")
 os.environ.setdefault("ADMIN_API_KEY", "test-admin-key")
+os.environ.setdefault("ADMIN_USERNAME", "admin")
+os.environ.setdefault("ADMIN_PASSWORD", "test-admin-password")
+os.environ.setdefault("ADMIN_SESSION_SECRET", "test-admin-session-secret")
 
 import fakeredis
 import pgserver

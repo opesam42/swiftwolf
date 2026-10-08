@@ -9,7 +9,7 @@ from fastapi.security import APIKeyHeader
 from src.core.config import settings
 
 API_KEY_NAME = "X-SwiftWolf-Key"
-api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+api_key_header = APIKeyHeader(name=API_KEY_NAME, scheme_name="X-SwiftWolf-Key", auto_error=False)
 
 
 def verify_api_key(api_key: str = Security(api_key_header)) -> str:

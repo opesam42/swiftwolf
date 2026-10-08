@@ -14,7 +14,15 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/1"
 
     # HMAC KEY FOR HASHING RECEIPIENT ID LIKE BENEFICIARY ACCOUNT NUMBER,
-    SW_HMAC_KEY: str 
+    SW_HMAC_KEY: str
+
+    # Header key for /v1/internal JSON (scripts). Empty → SWIFTWOLF_API_KEY.
+    ADMIN_API_KEY: str = ""
+
+    # Browser dashboard login at /admin. Separate from SWIFTWOLF_API_KEY.
+    ADMIN_USERNAME: str = ""
+    ADMIN_PASSWORD: str = ""
+    ADMIN_SESSION_SECRET: str = "" 
 
     # AMOUNT CONTINUOUS SCORE CONFIG
     AMOUNT_SCORE_MAX_SCORE: float = Field(

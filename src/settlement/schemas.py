@@ -30,3 +30,4 @@ class SettleResponse(BaseModel):
     status: TransactionStatus
     is_settled: bool
     message: str
+    

@@ -1,3 +1,9 @@
+import newrelic.agent
+
+# Vercel has no start command for FastAPI; the agent reads NEW_RELIC_LICENSE_KEY
+# from the process environment. Must run before FastAPI is imported.
+newrelic.agent.initialize()
+
 from contextlib import asynccontextmanager
 
 from pathlib import Path

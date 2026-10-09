@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends
 
 from src.core.auth import verify_api_key
@@ -5,6 +7,8 @@ from src.core.database import SessionDep
 from src.core.redis import RedisDep
 from src.scoring.schemas import ScoreRequest, ScoreResponse
 from src.scoring.services import ScoreService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(verify_api_key)])
 
@@ -33,4 +37,26 @@ async def score_transaction_endpoint(
     }
 
     result = ScoreService(db, redis_client).score(transaction)
+    decision = result["decision"]
+    decision_value = decision.value if hasattr(decision, "value") else decision
+    reasons = result.get("reasons") or []
+    reason_values = [reason.value if hasattr(reason, "value") else reason for reason in reasons]
+    logger.info(
+        "score ref=%s customer=%s decision=%s score=%s",
+        request.transaction_reference,
+        request.customer_id,
+        decision_value,
+        result["score"],
+        extra={
+            "transaction_reference": request.transaction_reference,
+            "customer_id": request.customer_id,
+            "amount_kobo": request.amount,
+            "transaction_type": request.transaction_type.value,
+            "medium": request.medium.value,
+            "provider": request.provider,
+            "decision": decision_value,
+            "score": result["score"],
+            "reasons": reason_values,
+        },
+    )
     return ScoreResponse(**result)

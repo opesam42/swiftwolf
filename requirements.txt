@@ -38,6 +38,7 @@ MarkupSafe==3.0.3
 matplotlib==3.11.0
 mdurl==0.1.2
 narwhals==2.24.0
+newrelic==14.0.0
 numpy==2.5.1
 packaging==26.2
 pgserver==0.1.4
